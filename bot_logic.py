@@ -512,7 +512,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 for cta_correo, cta_row_idx in cuentas_disponibles:
                     botones_cuentas.append([{"text": f"📧 {cta_correo}", "callback_data": f"admin_selcta_{row_idx_edit}_{cta_row_idx}"}])
 
-                botones_cuentas.append([{"text": "🔙 Volver", "callback_data": f"admin_editar_fila_{row_idx_edit}"}]]
+                botones_cuentas.append([{"text": "🔙 Volver", "callback_data": f"admin_editar_fila_{row_idx_edit}"}])
 
                 msg_sel = f"🔄 *SELECCIONAR NUEVA CUENTA ({srv_cli})*\n\nSelecciona la cuenta de destino que tiene cupos libres:"
                 if es_callback and editar_mensaje_callback:
