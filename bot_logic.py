@@ -28,7 +28,8 @@ esperando_captura_pago = {}
 esperando_nuevo_nombre_perfil = {}
 esperando_busqueda_admin = {}
 asistente_cuenta_datos = {}
-asistente_edicion_admin = {}  # Guarda temporalmente los pasos de edición manual de un cliente
+asistente_edicion_admin = {}
+asistente_cupon_admin = {} # Guarda temporalmente la creación del cupón paso a paso
 
 
 def safe_get(row_dict, key, default=""):
@@ -78,10 +79,84 @@ def obtener_tasa_usdt_hoy():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con editor manual de clientes y selección de perfiles con PIN."""
+    """Cerebro industrial con gestión automatizada de cupones por horas o usos desde /admin."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
+
+    # -------------------------------------------------------------
+    # ASISTENTE ADMIN: CREACIÓN DE CUPONES PASO A PASO
+    # -------------------------------------------------------------
+    if not es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and str_chat_id in asistente_cupon_admin and texto:
+        sesion_c = asistente_cupon_admin[str_chat_id]
+        paso_c = sesion_c.get("paso")
+
+        if paso_c == "esperando_codigo":
+            sesion_c["codigo"] = texto.strip().upper()
+            sesion_c["paso"] = "esperando_tipo"
+            enviar_mensaje_callback(
+                chat_id,
+                f"🎟️ *CUPÓN:* `{sesion_c['codigo']}`\n\n"
+                "Paso 2: ¿Qué tipo de descuento deseas aplicar?",
+                {
+                    "inline_keyboard": [
+                        [{"text": "💵 Descuento Fijo (USD)", "callback_data": "admin_cupontipo_Fijo"}],
+                        [{"text": "📊 Descuento Porcentual (%)", "callback_data": "admin_cupontipo_Porcentaje"}],
+                        [{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]
+                    ]
+                }
+            )
+            return
+
+        elif paso_c == "esperando_valor":
+            try:
+                valor = float(texto.strip())
+                sesion_c["valor"] = valor
+                
+                if sesion_c["modo"] == "horas":
+                    sesion_c["paso"] = "esperando_duracion_horas"
+                    enviar_mensaje_callback(chat_id, "Paso 4: ¿Cuántas horas estará activo este cupón relámpago? (Ej: `3`, `12`, `24`):")
+                else:
+                    sesion_c["paso"] = "esperando_usos_maximos"
+                    enviar_mensaje_callback(chat_id, "Paso 4: ¿Cuántos usos máximos tendrá este cupón? (Ej: `10`, `50`, `100`):")
+            except ValueError:
+                enviar_mensaje_callback(chat_id, "⚠️ Por favor ingresa un número válido (Ej: `1.00` o `10`):")
+            return
+
+        elif paso_c == "esperando_duracion_horas":
+            try:
+                horas = int(texto.strip())
+                sesion_c["duracion_horas"] = horas
+                sesion_c["usos_maximos"] = 999999 # Ilimitado por usos, solo por tiempo
+                guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_mensaje_callback)
+            except ValueError:
+                enviar_mensaje_callback(chat_id, "⚠️ Ingresa un número entero de horas válido (Ej: `3`):")
+            return
+
+        elif paso_c == "esperando_usos_maximos":
+            try:
+                usos = int(texto.strip())
+                sesion_c["usos_maximos"] = usos
+                sesion_c["duracion_horas"] = 0 # Sin límite de horas, solo por usos
+                guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_mensaje_callback)
+            except ValueError:
+                enviar_mensaje_callback(chat_id, "⚠️ Ingresa un número entero de usos válido (Ej: `20`):")
+            return
+
+    # Callbacks para la selección de tipo de cupón
+    if es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and accion.startswith("admin_cupontipo_") and str_chat_id in asistente_cupon_admin:
+        tipo_desc = accion.split("_")[-1]
+        sesion_c = asistente_cupon_admin[str_chat_id]
+        sesion_c["tipo"] = tipo_desc
+        sesion_c["paso"] = "esperando_valor"
+        
+        simbolo = "$" if tipo_desc == "Fijo" else "%"
+        enviar_mensaje_callback(
+            chat_id,
+            f"🎟️ *CUPÓN:* `{sesion_c['codigo']}` ({tipo_desc})\n\n"
+            f"Paso 3: Escribe el valor del descuento (Ej: `1.00` si es un dólar, o `15` si es 15{simbolo}):"
+        )
+        return
 
     # -------------------------------------------------------------
     # ASISTENTE ADMIN: CARGA PASO A PASO DE CUENTA Y PINS DE PERFILES
@@ -193,7 +268,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
             try:
                 sheet = conectar_sheets()
-                sheet.update_cell(row_idx, 5, nueva_fecha) # Columna E es Vencimiento
+                sheet.update_cell(row_idx, 5, nueva_fecha)
                 enviar_mensaje_callback(
                     chat_id,
                     f"✅ *¡Fecha de vencimiento actualizada con éxito!*\n\nLa fila {row_idx} ahora vence el: `{nueva_fecha}`",
@@ -336,6 +411,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             asistente_cuenta_datos.pop(str_chat_id)
         if str_chat_id in asistente_edicion_admin:
             asistente_edicion_admin.pop(str_chat_id)
+        if str_chat_id in asistente_cupon_admin:
+            asistente_cupon_admin.pop(str_chat_id)
             
         texto_menu = (
             "🤖 *Bienvenido al servicio de Streaming*\n\n"
@@ -451,7 +528,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # PANEL DE ADMINISTRADOR Y EDITOR MANUAL DE CLIENTES
+    # PANEL DE ADMINISTRADOR Y CREACIÓN DE CUPONES
     # -------------------------------------------------------------
     if accion == "/admin" or accion == "admin_volver":
         if str_chat_id in esperando_captura_pago:
@@ -463,6 +540,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             asistente_cuenta_datos.pop(str_chat_id)
         if str_chat_id in asistente_edicion_admin:
             asistente_edicion_admin.pop(str_chat_id)
+        if str_chat_id in asistente_cupon_admin:
+            asistente_cupon_admin.pop(str_chat_id)
 
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             reporte = generar_reporte_admin()
@@ -471,6 +550,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     [{"text": "📊 Resumen General del Negocio", "callback_data": "admin_resumen_negocio"}],
                     [{"text": "📋 Ver Pagos Pendientes", "callback_data": "admin_ver_pendientes"}],
                     [{"text": "➕ Cargar Cuenta y PINs (Stock)", "callback_data": "admin_cargar_cuenta"}],
+                    [{"text": "🎟️ Crear Nuevo Cupón de Descuento", "callback_data": "admin_crear_cupon"}],
                     [{"text": "🔍 Buscar y Gestionar Cliente Activo", "callback_data": "admin_pedir_busqueda"}],
                     [{"text": "🗑️ Gestionar / Eliminar Vencidos", "callback_data": "admin_ver_vencidos"}],
                     [{"text": "📦 Asignar Stock Pendiente", "callback_data": "admin_asignar_stock"}],
@@ -483,6 +563,46 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, reporte, teclado)
         else:
             enviar_mensaje_callback(chat_id, "⛔ No tienes permisos para acceder a este panel.", get_main_menu_keyboard())
+        return
+
+    # Inicio del asistente de creación de cupones (Elige modalidad: Horas o Usos)
+    elif accion == "admin_crear_cupon":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            texto_c = (
+                "🎟️ *CREAR NUEVO CUPÓN DE DESCUENTO*\n\n"
+                "¿Cómo deseas limitar este cupón?"
+            )
+            teclado_modo = {
+                "inline_keyboard": [
+                    [{"text": "⏱️ Por Horas (Cupón Relámpago)", "callback_data": "admin_cuponmodo_horas"}],
+                    [{"text": "🔢 Por Cantidad de Usos", "callback_data": "admin_cuponmodo_usos"}],
+                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_c, teclado_modo)
+            else:
+                enviar_mensaje_callback(chat_id, texto_c, teclado_modo)
+        return
+
+    elif accion.startswith("admin_cuponmodo_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            modo = accion.split("_")[-1] # "horas" o "usos"
+            asistente_cupon_admin[str_chat_id] = {
+                "modo": modo,
+                "paso": "esperando_codigo"
+            }
+            
+            modo_texto = "por Horas (Relámpago)" if modo == "horas" else "por Cantidad de Usos"
+            texto_p1 = (
+                f"🎟️ *NUEVO CUPÓN ({modo_texto})*\n\n"
+                "Paso 1: Escribe el código del cupón en mayúsculas (Ej: `FLASH3`, `VIP2026`):"
+            )
+            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]}
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_p1, teclado_canc)
+            else:
+                enviar_mensaje_callback(chat_id, texto_p1, teclado_canc)
         return
 
     # Menú principal de edición manual para una fila específica
@@ -524,7 +644,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, f"❌ Error al cargar menú de edición: {e}", get_back_keyboard())
         return
 
-    # Paso 1 para cambiar de correo: Mostrar cuentas activas disponibles
     elif accion.startswith("admin_cambiar_correo_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
@@ -572,7 +691,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, f"❌ Error listando cuentas: {e}", get_back_keyboard())
         return
 
-    # Paso 2: Mostrar perfiles disponibles con su PIN al lado
     elif accion.startswith("admin_selcuenta_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
@@ -592,7 +710,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 limite_max = 5 if "netflix" in srv_cuenta.lower() else 7
                 registros_clientes = sheet_principal.get_all_records()
 
-                # Descubrimos qué perfiles ya están ocupados en este correo específico
                 perfiles_ocupados = set()
                 for r in registros_clientes:
                     cta = safe_get(r, "Cuenta", "").lower()
@@ -633,7 +750,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, f"❌ Error listando perfiles: {e}", get_back_keyboard())
         return
 
-    # Paso 3: Aplicar el cambio de correo y perfil de forma segura (actualizando contadores)
     elif accion.startswith("admin_aplicar_cambio_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
@@ -646,14 +762,12 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
 
-                # 1. Obtenemos datos anteriores del cliente para liberar su cupo viejo
                 registros_clientes = sheet_principal.get_all_records()
                 fila_anterior = registros_clientes[row_idx - 2] if (row_idx - 2) < len(registros_clientes) else {}
                 correo_viejo = safe_get(fila_anterior, "Cuenta", "")
                 tid_cliente = safe_get(fila_anterior, "Telegram_ID", "")
                 srv_cliente = safe_get(fila_anterior, "Servicio", "Disney+")
 
-                # Liberamos cupo en la cuenta vieja si existía
                 if correo_viejo and "pendiente" not in correo_viejo.lower():
                     registros_c = sheet_cuentas.get_all_records()
                     for idx_c, c_row in enumerate(registros_c, start=2):
@@ -665,11 +779,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                                 sheet_cuentas.update_cell(idx_c, 6, "Activa")
                             break
 
-                # 2. Obtenemos datos de la cuenta nueva
                 fila_cuenta_nueva = sheet_cuentas.row_values(idx_cuenta_sheet)
                 correo_nuevo = fila_cuenta_nueva[1] if len(fila_cuenta_nueva) > 1 else ""
                 
-                # Sumamos cupo en la cuenta nueva
                 ocu_n = int(fila_cuenta_nueva[4]) if len(fila_cuenta_nueva) > 4 and fila_cuenta_nueva[4].isdigit() else 0
                 nuevos_ocu_n = ocu_n + 1
                 sheet_cuentas.update_cell(idx_cuenta_sheet, 5, nuevos_ocu_n)
@@ -678,7 +790,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 if nuevos_ocu_n >= cap_n:
                     sheet_cuentas.update_cell(idx_cuenta_sheet, 6, "Llena")
 
-                # 3. Actualizamos al cliente en la hoja principal
                 nuevo_perfil_str = f"Perfil {num_perfil}"
                 sheet_principal.update_cell(row_idx, 3, correo_nuevo)
                 sheet_principal.update_cell(row_idx, 4, nuevo_perfil_str)
@@ -696,7 +807,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 else:
                     enviar_mensaje_callback(chat_id, texto_exito, {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]})
 
-                # Notificamos al cliente de su nueva asignación
                 if tid_cliente:
                     try:
                         msg_cli = (
@@ -714,7 +824,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, f"❌ Error al aplicar cambio: {e}", get_back_keyboard())
         return
 
-    # Opción: Modificar Fecha de Vencimiento de forma manual
     elif accion.startswith("admin_cambiar_fecha_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
@@ -1266,7 +1375,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 [{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}]
             ]
         }
-        mensaje = "💬 *ATENCIÓN AL CLIENTE*\n\nSi tienes dudas o requieres soporte técnico, comunícate con nosotros por WhatsApp:"
+        mensaje = "💬 *ATENCIÓN AL CLIENTE*\n\nIf tienes dudas o requieres soporte técnico, comunícate con nosotros por WhatsApp:"
         if es_callback and editar_mensaje_callback:
             editar_mensaje_callback(chat_id, message_id, mensaje, teclado_whatsapp)
         else:
@@ -1276,6 +1385,73 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         mensaje = "¡Hola! Selecciona una opción del menú de abajo:"
         teclado = get_main_menu_keyboard()
         enviar_mensaje_callback(chat_id, mensaje, teclado)
+
+
+def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
+    """Crea automáticamente la pestaña 'Cupones' si no existe y guarda el nuevo cupón."""
+    try:
+        sheet_principal = conectar_sheets()
+        spreadsheet = sheet_principal.spreadsheet
+        
+        try:
+            sheet_cupones = spreadsheet.worksheet("Cupones")
+        except Exception:
+            sheet_cupones = spreadsheet.add_worksheet(title="Cupones", rows="1000", cols="7")
+            sheet_cupones.append_row(["Codigo", "Tipo", "Valor", "Fecha de Creacion", "Duracion (Horas)", "Usos Maximos", "Veces Usado", "Estado"])
+
+        # Verificamos encabezados si ya existía la hoja
+        try:
+            fila_1 = sheet_cupones.row_values(1)
+            if len(fila_1) < 8:
+                sheet_cupones.update("A1:H1", [["Codigo", "Tipo", "Valor", "Fecha de Creacion", "Duracion (Horas)", "Usos Maximos", "Veces Usado", "Estado"]])
+        except Exception:
+            pass
+
+        codigo = sesion_c["codigo"]
+        tipo = sesion_c["tipo"]
+        valor = sesion_c["valor"]
+        fecha_creacion = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        duracion_horas = sesion_c["duracion_horas"]
+        usos_maximos = sesion_c["usos_maximos"]
+        veces_usado = 0
+        estado = "Activo"
+
+        sheet_cupones.append_row([
+            codigo,
+            tipo,
+            str(valor),
+            fecha_creacion,
+            str(duracion_horas),
+            str(usos_maximos),
+            str(veces_usado),
+            estado
+        ])
+
+        asistente_cupon_admin.pop(str(chat_id), None)
+
+        detalle_limite = f"{duracion_horas} horas" if duracion_horas > 0 else f"{usos_maximos} usos máximos"
+        simbolo = "$" if tipo == "Fijo" else "%"
+
+        enviar_msg_cb(
+            chat_id,
+            f"✅ *¡CUPÓN CREADO CON ÉXITO!*\n\n"
+            f"• *Código:* `{codigo}`\n"
+            f"• *Descuento:* {valor}{simbolo} ({tipo})\n"
+            f"• *Límite:* {detalle_limite}\n"
+            f"• *Estado:* Activo y listo para usar.",
+            {
+                "inline_keyboard": [
+                    [{"text": "🎟️ Crear Otro Cupón", "callback_data": "admin_crear_cupon"}],
+                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                ]
+            }
+        )
+    except Exception as e:
+        asistente_cupon_admin.pop(str(chat_id), None)
+        print(f"Error guardando cupón: {e}")
+        enviar_msg_cb(chat_id, f"❌ Ocurrió un error al guardar el cupón en Google Sheets: {e}", {
+            "inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]
+        })
 
 
 def obtener_pin_asignado_cliente(correo_cuenta, nombre_perfil):
