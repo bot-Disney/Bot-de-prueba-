@@ -2406,7 +2406,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
