@@ -554,7 +554,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     p_token = p_libre.replace(" ", "_")
                     botones_perfiles.append([{"text": f"📺 {p_libre}", "callback_data": f"admin_aplicarCambio_{row_idx_cli}_{row_idx_cta_nueva}_{p_token}"}])
 
-                botones_perfiles.append([{"text": "🔙 Volver", "callback_data": f"admin_cambiar_cuenta_{row_idx_cli}"}]]
+                botones_perfiles.append([{"text": "🔙 Volver", "callback_data": f"admin_cambiar_cuenta_{row_idx_cli}"}])
 
                 msg_p = f"📺 *SELECCIONAR PERFIL LIBRE*\n\nCuenta seleccionada: `{correo_nuevo}`\nSelecciona el perfil disponible que se le asignará:"
                 if es_callback and editar_mensaje_callback:
