@@ -72,8 +72,8 @@ async def recibir_webhook(request: Request):
             # Creamos una llave única por usuario y botón presionado
             clave_clic = f"{chat_id}_{callback_data}"
             if clave_clic in clics_procesados:
-                # Si hizo clic en el mismo botón hace menos de 0.8 segundos, ignoramos el duplicado
-                if ahora - clics_procesados[clave_clic] < 0.8:
+                # Si hizo clic en el mismo botón hace menos de 1.5 segundos, ignoramos el duplicado
+                if ahora - clics_procesados[clave_clic] < 1.5:
                     responder_callback_telegram(callback_id)
                     return {"status": "ignorado_por_doble_clic"}
             
