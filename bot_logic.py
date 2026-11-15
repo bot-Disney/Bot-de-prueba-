@@ -1384,6 +1384,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         f"• *Cliente:* {nombre_cliente}\n"
                         f"• *Servicio:* {srv_aprobado} ({perfil_asignado})\n"
                         f"• *Cuenta:* `{cuenta_fila}`\n"
+                        f"• *Tipo:* {tipo_operacion}\n"
                         f"• *Método:* {metodo_pago}"
                     )
                     if tid_cliente:
