@@ -15,7 +15,7 @@ PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
 TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
+PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -120,7 +120,7 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con protección de suscripciones existentes en renovaciones y rechazos seguros."""
+    """Cerebro industrial con gestión y control completo de cupones desde /admin."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -201,7 +201,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     "inline_keyboard": [
                         [{"text": "💵 Descuento Fijo (USD)", "callback_data": "admin_cupontipo_Fijo"}],
                         [{"text": "📊 Descuento Porcentual (%)", "callback_data": "admin_cupontipo_Porcentaje"}],
-                        [{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]
+                        [{"text": "🔙 Cancelar", "callback_data": "admin_gestionar_cupones"}]
                     ]
                 }
             )
@@ -640,7 +640,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # PANEL DE ADMINISTRADOR Y CREACIÓN DE CUPONES
+    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUPONES
     # -------------------------------------------------------------
     if accion == "/admin" or accion == "admin_volver":
         if str_chat_id in esperando_captura_pago:
@@ -666,7 +666,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     [{"text": "📊 Resumen General del Negocio", "callback_data": "admin_resumen_negocio"}],
                     [{"text": "📋 Ver Pagos Pendientes", "callback_data": "admin_ver_pendientes"}],
                     [{"text": "➕ Cargar Cuenta y PINs (Stock)", "callback_data": "admin_cargar_cuenta"}],
-                    [{"text": "🎟️ Crear Nuevo Cupón de Descuento", "callback_data": "admin_crear_cupon"}],
+                    [{"text": "🎟️ Crear y Gestionar Cupones", "callback_data": "admin_gestionar_cupones"}],
                     [{"text": "🔍 Buscar y Gestionar Cliente Activo", "callback_data": "admin_pedir_busqueda"}],
                     [{"text": "🗑️ Gestionar / Eliminar Vencidos", "callback_data": "admin_ver_vencidos"}],
                     [{"text": "📦 Asignar Stock Pendiente", "callback_data": "admin_asignar_stock"}],
@@ -681,6 +681,112 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             enviar_mensaje_callback(chat_id, "⛔ No tienes permisos para acceder a este panel.", get_main_menu_keyboard())
         return
 
+    elif accion == "admin_gestionar_cupones":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            if str_chat_id in asistente_cupon_admin:
+                asistente_cupon_admin.pop(str_chat_id)
+                
+            texto_gc = (
+                "🎟️ *GESTIÓN DE CUPONES DE DESCUENTO*\n\n"
+                "Aquí puedes crear nuevos códigos promocionales o ver y administrar los cupones existentes:"
+            )
+            teclado_gc = {
+                "inline_keyboard": [
+                    [{"text": "➕ Crear Nuevo Cupón", "callback_data": "admin_crear_cupon"}],
+                    [{"text": "📋 Ver / Listar Cupones Existentes", "callback_data": "admin_ver_cupones"}],
+                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_gc, teclado_gc)
+            else:
+                enviar_mensaje_callback(chat_id, texto_gc, teclado_gc)
+        return
+
+    elif accion == "admin_ver_cupones":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                try:
+                    sheet_cupones = spreadsheet.worksheet("Cupones")
+                    registros = sheet_cupones.get_all_records()
+                except Exception:
+                    registros = []
+
+                if not registros:
+                    teclado_vacio = {"inline_keyboard": [
+                        [{"text": "➕ Crear Nuevo Cupón", "callback_data": "admin_crear_cupon"}],
+                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]
+                    ]}
+                    if es_callback and editar_mensaje_callback:
+                        editar_mensaje_callback(chat_id, message_id, "🎟️ No hay cupones registrados en Google Sheets.", teclado_vacio)
+                    else:
+                        enviar_mensaje_callback(chat_id, "🎟️ No hay cupones registrados en Google Sheets.", teclado_vacio)
+                    return
+
+                enviar_mensaje_callback(chat_id, f"📋 *LISTA DE CUPONES REGISTRADOS* ({len(registros)} en total):")
+
+                for idx, row in enumerate(registros, start=2):
+                    codigo = safe_get(row, "Codigo", "S/C")
+                    tipo = safe_get(row, "Tipo", "Fijo")
+                    valor = safe_get(row, "Valor", "0")
+                    duracion = safe_get(row, "Duracion (Horas)", "0")
+                    usos_max = safe_get(row, "Usos Maximos", "0")
+                    veces_usado = safe_get(row, "Veces Usado", "0")
+                    estado = safe_get(row, "Estado", "Activo")
+
+                    simbolo = "$" if tipo.lower() == "fijo" else "%"
+                    limite_txt = f"{duracion}h relámpago" if int(duracion) > 0 else f"{usos_max} usos máx"
+
+                    txt_c = (
+                        f"🎟️ *Cupón:* `{codigo}`\n"
+                        f"• *Descuento:* {valor}{simbolo} ({tipo})\n"
+                        f"• *Límite:* {limite_txt}\n"
+                        f"• *Usados:* `{veces_usado}` veces\n"
+                        f"• *Estado:* *{estado}*"
+                    )
+                    teclado_estado = {
+                        "inline_keyboard": [
+                            [{"text": "🗑️ Eliminar / Desactivar Cupón", "callback_data": f"admin_delcupun_{idx}"}]
+                        ]
+                    }
+                    enviar_mensaje_callback(chat_id, txt_c, teclado_estado)
+
+                enviar_mensaje_callback(chat_id, "Gestión de listado finalizada.", {
+                    "inline_keyboard": [
+                        [{"text": "➕ Crear Otro Cupón", "callback_data": "admin_crear_cupon"}],
+                        [{"text": "🔙 Volver a Gestión de Cupones", "callback_data": "admin_gestionar_cupones"}]
+                    ]
+                })
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error al listar cupones: {e}", get_back_keyboard())
+        return
+
+    elif accion.startswith("admin_delcupun_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                row_idx_cupon = int(accion.split("_")[-1])
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cupones = spreadsheet.worksheet("Cupones")
+                
+                # Borramos la fila del cupón en Google Sheets
+                sheet_cupones.delete_rows(row_idx_cupon)
+                
+                if message_id:
+                    quitar_botones_telegram(chat_id, message_id)
+
+                enviar_mensaje_callback(chat_id, f"✅ El cupón ha sido eliminado con éxito de la base de datos.", {
+                    "inline_keyboard": [
+                        [{"text": "📋 Ver Cupones Restantes", "callback_data": "admin_ver_cupones"}],
+                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]
+                    ]
+                })
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error al eliminar el cupón: {e}", get_back_keyboard())
+        return
+
     elif accion == "admin_crear_cupon":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             texto_c = (
@@ -691,7 +797,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 "inline_keyboard": [
                     [{"text": "⏱️ Por Horas (Cupón Relámpago)", "callback_data": "admin_cuponmodo_horas"}],
                     [{"text": "🔢 Por Cantidad de Usos", "callback_data": "admin_cuponmodo_usos"}],
-                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                    [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]
                 ]
             }
             if es_callback and editar_mensaje_callback:
@@ -713,7 +819,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 f"🎟️ *NUEVO CUPÓN ({modo_texto})*\n\n"
                 "Paso 1: Escribe el código del cupón en mayúsculas (Ej: `FLASH3`, `VIP2026`):"
             )
-            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]}
+            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_gestionar_cupones"}]]}
             if es_callback and editar_mensaje_callback:
                 editar_mensaje_callback(chat_id, message_id, texto_p1, teclado_canc)
             else:
@@ -1212,7 +1318,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_rechazado = safe_get(fila_obj, "Servicio", "Streaming")
 
-                # RECHAZO SEGURO: Devuelve la fila a Estado Activo sin borrarla ni tocar sus días
                 resultado_rechazo = rechazar_pago_seguro(row_idx)
 
                 if message_id:
@@ -1276,7 +1381,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
+                    f"• *PIN:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -1484,7 +1589,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         servicio_elegido = "Netflix" if es_netflix else "Disney+"
         srv_clave = "netflix" if es_netflix else "disney"
         
-        # Para compras nuevas sí creamos una fila nueva pendiente
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
         
         if existen_cupones_activos():
@@ -1674,7 +1778,6 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
 
     try:
         sheet = conectar_sheets()
-        # En lugar de crear una fila nueva para renovar, actualizamos la fila existente a "Pendiente Pago"
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
         
         registros = sheet.get_all_records()
@@ -1783,8 +1886,8 @@ def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
             f"• *Estado:* Activo y listo para usar.",
             {
                 "inline_keyboard": [
-                    [{"text": "🎟️ Crear Otro Cupón", "callback_data": "admin_crear_cupon"}],
-                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                    [{"text": "🎟️ Ver Lista de Cupones", "callback_data": "admin_ver_cupones"}],
+                    [{"text": "🔙 Volver a Gestión de Cupones", "callback_data": "admin_gestionar_cupones"}]
                 ]
             }
         )
@@ -1792,7 +1895,7 @@ def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
         asistente_cupon_admin.pop(str(chat_id), None)
         print(f"Error guardando cupón: {e}")
         enviar_msg_cb(chat_id, f"❌ Ocurrió un error al guardar el cupón en Google Sheets: {e}", {
-            "inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]
+            "inline_keyboard": [[{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]]
         })
 
 
@@ -1861,7 +1964,6 @@ def registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_c
 
 
 def limpiar_fila_cancelada_o_renovacion(row_idx):
-    """Si cancelan una compra nueva, borra la fila. Si cancelan una renovación, solo restaura el estado a Activo."""
     try:
         sheet_principal = conectar_sheets()
         fila_datos = sheet_principal.row_values(row_idx)
@@ -1872,12 +1974,10 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
         vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
 
         if "pendiente" in estado_actual:
-            # Si tiene fecha de vencimiento válida, es una renovación: solo la devolvemos a Activa
             if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
                 sheet_principal.update_cell(row_idx, 6, "Activo")
                 print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
             else:
-                # Si es compra nueva sin fecha, sí limpiamos y liberamos
                 correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
                 if correo_a_liberar and "pendiente de stock" not in correo_a_liberar.lower():
                     try:
@@ -1902,7 +2002,6 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
 
 
 def rechazar_pago_seguro(row_idx):
-    """Rechaza el pago de manera segura: si es renovación, restaura a Activo. Si es compra nueva vacía, la elimina."""
     try:
         sheet_principal = conectar_sheets()
         fila_datos = sheet_principal.row_values(row_idx)
@@ -1912,11 +2011,9 @@ def rechazar_pago_seguro(row_idx):
         vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
 
         if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
-            # Es una renovación: NO BORRAMOS LA FILA, solo restauramos el estado a Activo
             sheet_principal.update_cell(row_idx, 6, "Activo")
             return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
         else:
-            # Es una compra nueva: liberamos stock y borramos la fila temporal
             resultado = liberar_y_eliminar_fila_suscripcion(row_idx)
             return f"Pago de la fila {row_idx} rechazado. Fila eliminada y cupo liberado con éxito."
     except Exception as e:
@@ -2031,7 +2128,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
