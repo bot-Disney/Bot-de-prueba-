@@ -80,8 +80,47 @@ def obtener_tasa_usdt_hoy():
     return TASA_RESPALDO_BS
 
 
+def existen_cupones_activos():
+    """Verifica si hay al menos un cupón activo y vigente en Google Sheets."""
+    try:
+        sheet_principal = conectar_sheets()
+        spreadsheet = sheet_principal.spreadsheet
+        sheet_cupones = spreadsheet.worksheet("Cupones")
+        registros = sheet_cupones.get_all_records()
+        
+        ahora = datetime.datetime.now()
+        for row in registros:
+            estado = safe_get(row, "Estado", "Activo").lower()
+            if estado == "activo":
+                fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
+                duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
+                
+                expirado = False
+                if fecha_creacion_str and duracion_horas_str.isdigit():
+                    duracion_horas = int(duracion_horas_str)
+                    if duracion_horas > 0:
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                            try:
+                                fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
+                                if ahora > (fecha_creacion + datetime.timedelta(hours=duracion_horas)):
+                                    expirado = True
+                                break
+                            except ValueError:
+                                continue
+                if expirado:
+                    continue
+                
+                usos_max = int(safe_get(row, "Usos Maximos", "999999"))
+                veces_usado = int(safe_get(row, "Veces Usado", "0"))
+                if veces_usado < usos_max:
+                    return True
+        return False
+    except Exception:
+        return False
+
+
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con integración de cupones, FAQ y detalle enriquecido para el administrador."""
+    """Cerebro industrial con integración de cupones inteligentes, FAQ y detalle enriquecido para el administrador."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -506,7 +545,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             servicio_asociado = "Disney+"
             pantalla_asociada = "Perfil 1"
 
-        # Recuperamos el desglose de pago detallado guardado para este usuario
         info_pago = detalles_pago_activos.get(str_chat_id, {})
         cupon_txt = info_pago.get("cupon", "Ninguno (Precio Regular)")
         monto_usd = info_pago.get("monto_usd", 0.0)
@@ -1373,7 +1411,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             sub_unica = suscripciones[0]
             row_idx_unico = sub_unica.get("_row_index")
             srv_unico = safe_get(sub_unica, "Servicio", "Disney+").lower()
-            preguntar_por_cupon_pago(chat_id, str_chat_id, "netflix" if "netflix" in srv_unico else "disney", "renovar", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+            srv_clave = "netflix" if "netflix" in srv_unico else "disney"
+            
+            # Verificación inteligente de cupones activos
+            if existen_cupones_activos():
+                preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+            else:
+                iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         else:
             botones_selector = []
             for sub in suscripciones:
@@ -1398,8 +1442,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             registros = sheet.get_all_records()
             fila_obj = registros[row_idx_elegido - 2] if (row_idx_elegido - 2) < len(registros) else {}
             srv_fila = safe_get(fila_obj, "Servicio", "Disney+").lower()
+            srv_clave = "netflix" if "netflix" in srv_fila else "disney"
             
-            preguntar_por_cupon_pago(chat_id, str_chat_id, "netflix" if "netflix" in srv_fila else "disney", "renovar", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+            # Verificación inteligente de cupones activos
+            if existen_cupones_activos():
+                preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+            else:
+                iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         except Exception as e:
             print(f"Error procesando renovación de fila específica: {e}")
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error al seleccionar la pantalla. Intenta de nuevo.", get_back_keyboard())
@@ -1434,9 +1483,15 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         es_netflix = "netflix" in accion
         servicio_elegido = "Netflix" if es_netflix else "Disney+"
+        srv_clave = "netflix" if es_netflix else "disney"
         
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
-        preguntar_por_cupon_pago(chat_id, str_chat_id, "netflix" if es_netflix else "disney", "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+        
+        # Verificación inteligente de cupones activos
+        if existen_cupones_activos():
+            preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
+        else:
+            iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
 
     elif accion.startswith("usar_cupon_"):
         try:
@@ -1633,7 +1688,6 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
     tasa_usdt = obtener_tasa_usdt_hoy()
     monto_bs = round(precio_usd * tasa_usdt, 2)
 
-    # Guardamos en memoria temporal los datos exactos para enviarlos al admin cuando reporte
     detalles_pago_activos[str_chat_id] = {
         "cupon": codigo_usado_str,
         "monto_usd": precio_usd,
@@ -1977,7 +2031,6 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
         servicio_asociado = "Disney+"
         pantalla_asociada = "Perfil 1"
 
-    # Recuperamos el desglose de pago detallado guardado para este usuario
     info_pago = detalles_pago_activos.get(str_chat_id, {})
     cupon_txt = info_pago.get("cupon", "Ninguno (Precio Regular)")
     monto_usd = info_pago.get("monto_usd", 0.0)
@@ -2432,7 +2485,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
@@ -2553,7 +2606,7 @@ def get_datos_keyboard(mostrar_renovar=False, suscripciones=None):
     if mostrar_renovar: 
         botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}])
         
-    botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
+    botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}],)
     botones.append([{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}])
     return {"inline_keyboard": botones}
 
