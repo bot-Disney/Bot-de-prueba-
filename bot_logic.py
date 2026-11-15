@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
+PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -136,7 +136,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     chat_id, 
                     message_id, 
                     "✅ *¡Normas aceptadas con éxito!*\n\nYa puedes disfrutar de tu servicio con total tranquilidad. Usa el menú principal cuando lo necesites.", 
-                    {"inline_keyboard": []}
+                    get_main_menu_keyboard() # <--- Aquí le devolvemos los botones del menú principal
                 )
             else:
                 enviar_mensaje_callback(chat_id, "✅ ¡Gracias por confirmar! Disfruta tu contenido.", get_main_menu_keyboard())
