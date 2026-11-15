@@ -13,7 +13,7 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
 PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
@@ -120,7 +120,7 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con integración de cupones inteligentes, FAQ y detalle enriquecido para el administrador."""
+    """Cerebro industrial con protección de suscripciones existentes en renovaciones y rechazos seguros."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -500,7 +500,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     if accion == "menu_principal" or accion == "/start" or accion == "/menu":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
         if str_chat_id in esperando_nuevo_nombre_perfil:
             esperando_nuevo_nombre_perfil.pop(str_chat_id)
         if str_chat_id in esperando_busqueda_admin:
@@ -567,7 +567,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             teclado_admin = {
                 "inline_keyboard": [
                     [{"text": "✅ Aprobar y Activar (+30 días)", "callback_data": f"aprobar_{row_idx_pendiente}_digital"}],
-                    [{"text": "❌ Rechazar (Eliminar Fila)", "callback_data": f"rechazar_{row_idx_pendiente}"}]
+                    [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx_pendiente}"}]
                 ]
             }
             enviar_foto_callback(int(ADMIN_ID), photo_file_id, caption_admin, teclado_admin)
@@ -596,7 +596,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     if accion == "efectivo" or accion == "/efectivo":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         botones_selector = []
@@ -645,7 +645,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     if accion == "/admin" or accion == "admin_volver":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
         if str_chat_id in esperando_busqueda_admin:
             esperando_busqueda_admin.pop(str_chat_id)
         if str_chat_id in asistente_cuenta_datos:
@@ -1057,7 +1057,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     teclado_aprobar = {
                         "inline_keyboard": [
                             [{"text": "✅ Aprobar y Activar (+30 días)", "callback_data": f"aprobar_{row_idx}_digital"}],
-                            [{"text": "❌ Rechazar (Eliminar Fila)", "callback_data": f"rechazar_{row_idx}"}]
+                            [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx}"}]
                         ]
                     }
                     enviar_mensaje_callback(chat_id, txt, teclado_aprobar)
@@ -1212,19 +1212,20 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_rechazado = safe_get(fila_obj, "Servicio", "Streaming")
 
-                limpiar_fila_cancelada(row_idx)
+                # RECHAZO SEGURO: Devuelve la fila a Estado Activo sin borrarla ni tocar sus días
+                resultado_rechazo = rechazar_pago_seguro(row_idx)
 
                 if message_id:
                     quitar_botones_telegram(chat_id, message_id)
 
-                enviar_mensaje_callback(chat_id, f"❌ Pago de la fila {row_idx} rechazado. Fila eliminada y cupo liberado con éxito.", get_back_keyboard())
+                enviar_mensaje_callback(chat_id, f"❌ {resultado_rechazo}", get_back_keyboard())
 
                 if tid_cliente:
                     try:
                         msg_rechazo = (
                             "⚠️ *COMPROBANTE RECHAZADO*\n\n"
                             f"Tu comprobante de pago para *{srv_rechazado}* no pudo ser verificado (puede ser ilegible, incorrecto o duplicado).\n\n"
-                            "Por favor, verifica los datos e intenta realizar la compra o reporte nuevamente desde el menú."
+                            "Tu suscripción actual sigue intacta. Por favor, verifica los datos e intenta reportar tu pago nuevamente desde el menú."
                         )
                         enviar_mensaje_callback(int(tid_cliente), msg_rechazo, get_main_menu_keyboard())
                     except Exception:
@@ -1239,7 +1240,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "ver_datos" or "cuenta" in accion:
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         if not suscripciones:
@@ -1341,7 +1342,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "obtener_codigo" or "codigo" in accion:
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         if not verificar_cliente_activo(chat_id):
             registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_callback)
@@ -1400,7 +1401,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "renovar_suscripcion":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         if not suscripciones:
@@ -1413,7 +1414,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_unico = safe_get(sub_unica, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_unico else "disney"
             
-            # Verificación inteligente de cupones activos
             if existen_cupones_activos():
                 preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
             else:
@@ -1444,7 +1444,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_fila = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_fila else "disney"
             
-            # Verificación inteligente de cupones activos
             if existen_cupones_activos():
                 preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
             else:
@@ -1456,7 +1455,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "comprar_extra":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         mensaje = (
             "🛒 *SELECCIONA EL SERVICIO A COMPRAR*\n\n"
@@ -1479,15 +1478,15 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion.startswith("pagar_servicio_"):
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         es_netflix = "netflix" in accion
         servicio_elegido = "Netflix" if es_netflix else "Disney+"
         srv_clave = "netflix" if es_netflix else "disney"
         
+        # Para compras nuevas sí creamos una fila nueva pendiente
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
         
-        # Verificación inteligente de cupones activos
         if existen_cupones_activos():
             preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
         else:
@@ -1524,7 +1523,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "soporte" or "pago" in accion:
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada(row_huerta)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         texto_wa = f"Hola, necesito soporte con mi servicio de Streaming. Mi ID es: {str_chat_id}."
         url_whatsapp = f"https://wa.me/{WHATSAPP_NUMERO}?text={texto_wa.replace(' ', '%20')}"
@@ -1675,8 +1674,8 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
 
     try:
         sheet = conectar_sheets()
+        # En lugar de crear una fila nueva para renovar, actualizamos la fila existente a "Pendiente Pago"
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-        sheet.update_cell(row_idx_target, 7, servicio_elegido)
         
         registros = sheet.get_all_records()
         fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
@@ -1861,45 +1860,68 @@ def registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_c
             print(f"Error enviando alerta de anomalía al admin: {e}")
 
 
-def limpiar_fila_cancelada(row_idx):
+def limpiar_fila_cancelada_o_renovacion(row_idx):
+    """Si cancelan una compra nueva, borra la fila. Si cancelan una renovación, solo restaura el estado a Activo."""
     try:
         sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        try:
-            fila_datos = sheet_principal.row_values(row_idx)
-        except Exception:
+        fila_datos = sheet_principal.row_values(row_idx)
+        if len(fila_datos) < 6:
             return
 
-        if len(fila_datos) < 3:
-            return
+        estado_actual = safe_get({"Estado": fila_datos[5]}, "Estado", "").lower()
+        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
 
-        estado_actual = safe_get({"Estado": fila_datos[5] if len(fila_datos) > 5 else ""}, "Estado", "").lower()
-        
-        if "pendiente" in estado_actual or estado_actual == "":
-            correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
-            
-            if correo_a_liberar and "pendiente de stock" not in correo_a_liberar.lower():
-                try:
-                    sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                    registros_cuentas = sheet_cuentas.get_all_records()
-                    for idx_c, c_row in enumerate(registros_cuentas, start=2):
-                        correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
-                        if correo_cta.lower() == correo_a_liberar.lower():
-                            ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                            nuevos_ocupados = max(0, ocupados - 1)
-                            sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                            
-                            if safe_get(c_row, "Estado", "").lower() == "llena":
-                                sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                            break
-                except Exception as e:
-                    print(f"Aviso al liberar stock en cancelación/rechazo: {e}")
-
-            sheet_principal.delete_rows(row_idx)
-            print(f"Fila {row_idx} eliminada por cancelación o rechazo.")
+        if "pendiente" in estado_actual:
+            # Si tiene fecha de vencimiento válida, es una renovación: solo la devolvemos a Activa
+            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
+                sheet_principal.update_cell(row_idx, 6, "Activo")
+                print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
+            else:
+                # Si es compra nueva sin fecha, sí limpiamos y liberamos
+                correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
+                if correo_a_liberar and "pendiente de stock" not in correo_a_liberar.lower():
+                    try:
+                        spreadsheet = sheet_principal.spreadsheet
+                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                        registros_cuentas = sheet_cuentas.get_all_records()
+                        for idx_c, c_row in enumerate(registros_cuentas, start=2):
+                            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
+                            if correo_cta.lower() == correo_a_liberar.lower():
+                                ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
+                                nuevos_ocupados = max(0, ocupados - 1)
+                                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
+                                if safe_get(c_row, "Estado", "").lower() == "llena":
+                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
+                                break
+                    except Exception as e:
+                        print(f"Aviso al liberar stock en cancelación: {e}")
+                sheet_principal.delete_rows(row_idx)
+                print(f"Fila nueva {row_idx} eliminada por cancelación.")
     except Exception as e:
-        print(f"Error limpiando fila: {e}")
+        print(f"Error en limpieza segura de fila: {e}")
+
+
+def rechazar_pago_seguro(row_idx):
+    """Rechaza el pago de manera segura: si es renovación, restaura a Activo. Si es compra nueva vacía, la elimina."""
+    try:
+        sheet_principal = conectar_sheets()
+        fila_datos = sheet_principal.row_values(row_idx)
+        if len(fila_datos) < 6:
+            return "Fila no encontrada."
+
+        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
+
+        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
+            # Es una renovación: NO BORRAMOS LA FILA, solo restauramos el estado a Activo
+            sheet_principal.update_cell(row_idx, 6, "Activo")
+            return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
+        else:
+            # Es una compra nueva: liberamos stock y borramos la fila temporal
+            resultado = liberar_y_eliminar_fila_suscripcion(row_idx)
+            return f"Pago de la fila {row_idx} rechazado. Fila eliminada y cupo liberado con éxito."
+    except Exception as e:
+        print(f"Error en rechazo seguro: {e}")
+        return f"Error al procesar el rechazo: {e}"
 
 
 def notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_target, detalle_operacion, enviar_cb, editar_cb=None, message_id=None, es_cb=False):
@@ -1947,7 +1969,7 @@ def notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_targ
             teclado_admin = {
                 "inline_keyboard": [
                     [{"text": "✅ Aprobar Efectivo (+30 días)", "callback_data": f"aprobar_{row_idx_target}_efectivo"}],
-                    [{"text": "❌ Rechazar (Eliminar Fila)", "callback_data": f"rechazar_{row_idx_target}"}]
+                    [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx_target}"}]
                 ]
             }
             enviar_cb(int(ADMIN_ID), texto_admin, teclado_admin)
@@ -2054,7 +2076,7 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
         teclado_admin = {
             "inline_keyboard": [
                 [{"text": "✅ Aprobar y Activar (+30 días)", "callback_data": f"aprobar_{row_idx_pendiente}_digital"}],
-                [{"text": "❌ Rechazar (Eliminar Fila)", "callback_data": f"rechazar_{row_idx_pendiente}"}]
+                [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx_pendiente}"}]
             ]
         }
         enviar_cb(int(ADMIN_ID), texto_admin, teclado_admin)
@@ -2485,7 +2507,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
@@ -2606,7 +2628,7 @@ def get_datos_keyboard(mostrar_renovar=False, suscripciones=None):
     if mostrar_renovar: 
         botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}])
         
-    botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}],)
+    botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
     botones.append([{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}])
     return {"inline_keyboard": botones}
 
