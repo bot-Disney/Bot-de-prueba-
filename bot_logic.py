@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "Provincial (0108)"
+PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -137,24 +137,48 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         if alcance == "individual":
             if "telegram_id_target" not in sesion_dif:
-                if not parametro.isdigit():
+                # El admin escribió un término de búsqueda (nombre, usuario, correo)
+                termino_busqueda = parametro.lower()
+                activos = obtener_clientes_activos_general()
+                encontrados = []
+
+                for idx, row_idx, act in activos:
+                    nom_a = safe_get(act, "Nombre", "").lower()
+                    tid_a = safe_get(act, "Telegram_ID", "").lower()
+                    cta_a = safe_get(act, "Cuenta", "").lower()
+                    srv_a = safe_get(act, "Servicio", "").lower()
+
+                    if (termino_busqueda in nom_a or 
+                        termino_busqueda in tid_a or 
+                        termino_busqueda in cta_a or 
+                        termino_busqueda in srv_a):
+                        encontrados.append((tid_a, nom_a, srv_a, cta_a))
+
+                if not encontrados:
                     enviar_mensaje_callback(
                         chat_id, 
-                        "⚠️ El Telegram ID debe ser un número válido. Por favor, escribe el ID correcto del usuario:",
+                        f"❌ No se encontró ningún cliente que coincida con: *{texto}*.\n\nIntenta escribir otro nombre, correo o ID:",
                         {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]}
                     )
                     return
 
-                sesion_dif["telegram_id_target"] = parametro
-                
-                if tipo_plantilla == "sospechoso":
-                    prompt_detalle = f"🚨 *USUARIO DESTINO:* `{parametro}`\n\nAhora escribe la **infracción o motivo específico** (Ej: `Uso simultáneo en más de 2 dispositivos` o `Uso indebido de credenciales`):"
-                else:
-                    prompt_detalle = f"💬 *USUARIO DESTINO:* `{parametro}`\n\nAhora escribe el **mensaje personalizado** que deseas enviarle a este usuario:"
+                # Creamos botones con los resultados encontrados para que el admin solo tenga que hacer un toque
+                botones_resultados = []
+                for tid_u, nom_u, srv_u, cta_u in encontrados:
+                    botones_resultados.append([{
+                        "text": f"👤 {nom_u} ({srv_u})", 
+                        "callback_data": f"admin_enviar_a_{tid_u}_{tipo_plantilla}"
+                    }])
+                botones_resultados.append([{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}])
 
-                enviar_mensaje_callback(chat_id, prompt_detalle, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]})
+                enviar_mensaje_callback(
+                    chat_id, 
+                    f"🔍 *Resultados de búsqueda para:* `{texto}`\n\nSelecciona el cliente al que deseas enviar el mensaje:",
+                    {"inline_keyboard": botones_resultados}
+                )
                 return
             else:
+                # Ya tenemos el ID seleccionado por botón y ahora el admin escribe el motivo o mensaje
                 tid_destino = sesion_dif["telegram_id_target"]
                 asistente_difusion_admin.pop(str_chat_id, None)
 
@@ -206,6 +230,35 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             f"✅ *Difusión masiva completada con éxito.*\n\nMensaje enviado a *{enviados}* clientes únicos.",
             {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
         )
+        return
+
+    # Selección de usuario mediante botón tras la búsqueda inteligente
+    if es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and accion.startswith("admin_enviar_a_"):
+        try:
+            partes = accion.split("_")
+            # Estructura: admin_enviar_a_[ID]_[tipo]
+            tid_seleccionado = partes[3]
+            tipo_plantilla = partes[4]
+
+            if str_chat_id not in asistente_difusion_admin:
+                asistente_difusion_admin[str_chat_id] = {}
+
+            asistente_difusion_admin[str_chat_id]["alcance"] = "individual"
+            asistente_difusion_admin[str_chat_id]["tipo"] = tipo_plantilla
+            asistente_difusion_admin[str_chat_id]["telegram_id_target"] = tid_seleccionado
+
+            if tipo_plantilla == "sospechoso":
+                prompt_detalle = f"🚨 *USUARIO SELECCIONADO (ID: `{tid_seleccionado}`)*\n\nAhora escribe la **infracción o motivo específico** (Ej: `Uso simultáneo en más de 2 dispositivos`):"
+            else:
+                prompt_detalle = f"💬 *USUARIO SELECCIONADO (ID: `{tid_seleccionado}`)*\n\nAhora escribe el **mensaje personalizado** que deseas enviarle:"
+
+            teclado_c = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]}
+            if editar_mensaje_callback and message_id:
+                editar_mensaje_callback(chat_id, message_id, prompt_detalle, teclado_c)
+            else:
+                enviar_mensaje_callback(chat_id, prompt_detalle, teclado_c)
+        except Exception as e:
+            print(f"Error seleccionando usuario individual: {e}")
         return
 
     # -------------------------------------------------------------
@@ -857,13 +910,12 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             if tipo == "sospechoso":
                 instruccion = (
                     "⚠️ *AVISO A USUARIO SOSPECHOSO*\n\n"
-                    "Paso 1: Escribe el **Telegram ID** del usuario que está infringiendo las normas (Ej: `123456789`):\n\n"
-                    "💡 *Tip:* Puedes copiar el ID directamente desde el buscador o reporte de pagos del panel admin."
+                    "Escribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente que deseas buscar para enviarle el aviso:"
                 )
             else:
                 instruccion = (
                     "💬 *MENSAJE DIRECTO A USUARIO*\n\n"
-                    "Paso 1: Escribe el **Telegram ID** del usuario al que deseas contactar:"
+                    "Escribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente que deseas buscar:"
                 )
 
             teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_alcance_individual"}]]}
@@ -1689,7 +1741,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN:* {pin_mostrar} 🔒\n"
+                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -1992,7 +2044,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         )
         teclado_term = {
             "inline_keyboard": [
-                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
+                [{"text": "🔙 Volver al Soporte", "callback_data": "soporte"}]
             ]
         }
         if es_callback and editar_mensaje_callback:
@@ -2486,7 +2538,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
@@ -2962,7 +3014,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
