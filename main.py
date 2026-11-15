@@ -72,7 +72,7 @@ async def recibir_webhook(request: Request):
             # Bloqueamos al usuario por su chat_id completo para que no pueda presionar NINGÚN botón en ráfaga
             if str(chat_id) in clics_procesados:
                 tiempo_transcurrido = ahora - clics_procesados[str(chat_id)]
-                if tiempo_transcurrido < 1.5:  # Tolera 1.5 segundos entre cualquier clic
+                if tiempo_transcurrido < 2.0:  # Tolera 1.5 segundos entre cualquier clic
                     responder_callback_telegram(callback_id)
                     return {"status": "ignorado_por_doble_clic"}
             
