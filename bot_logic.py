@@ -81,7 +81,7 @@ def obtener_tasa_usdt_hoy():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con integración de cupones y detalle enriquecido para el administrador."""
+    """Cerebro industrial con integración de cupones, FAQ y detalle enriquecido para el administrador."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -1463,6 +1463,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             print(f"Error pidiendo cupón: {e}")
         return
 
+    # -------------------------------------------------------------
+    # SOPORTE, PAGOS Y PREGUNTAS FRECUENTES (FAQ)
+    # -------------------------------------------------------------
     elif accion == "soporte" or "pago" in accion:
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
@@ -1472,15 +1475,39 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         url_whatsapp = f"https://wa.me/{WHATSAPP_NUMERO}?text={texto_wa.replace(' ', '%20')}"
         teclado_whatsapp = {
             "inline_keyboard": [
+                [{"text": "❓ Preguntas Frecuentes (FAQ)", "callback_data": "ver_faq"}],
                 [{"text": "💬 Soporte Técnico en WhatsApp", "url": url_whatsapp}],
                 [{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}]
             ]
         }
-        mensaje = "💬 *ATENCIÓN AL CLIENTE*\n\nSi tienes dudas o requieres soporte técnico, comunícate con nosotros por WhatsApp:"
+        mensaje = "💬 *CENTRO DE AYUDA Y SOPORTE*\n\nSelecciona una opción para resolver tus dudas rápidamente o comunícate con nosotros por WhatsApp:"
         if es_callback and editar_mensaje_callback:
             editar_mensaje_callback(chat_id, message_id, mensaje, teclado_whatsapp)
         else:
             enviar_mensaje_callback(chat_id, mensaje, teclado_whatsapp)
+
+    elif accion == "ver_faq":
+        mensaje_faq = (
+            "❓ *PREGUNTAS FRECUENTES (FAQ)* ❓\n\n"
+            "1️⃣ *¿Cómo obtengo el código de acceso (OTP)?*\n"
+            "Presiona el botón *🔑 Solicitar Código* en el menú principal. El bot buscará automáticamente el código más reciente en el correo de la cuenta y te lo enviará.\n\n"
+            "2️⃣ *¿Cómo aplico mi cupón de descuento?*\n"
+            "Cuando elijas renovar o comprar una pantalla, el bot te preguntará si tienes un cupón. Escríbelo y el monto se actualizará de inmediato.\n\n"
+            "3️⃣ *¿Qué pasa si sale 'Pendiente de Stock'?*\n"
+            "Significa que las cuentas actuales están al 100% de su capacidad. Puedes pagar con normalidad para asegurar tu **prioridad #1** y en cuanto carguemos una cuenta nueva el sistema te asignará tu acceso automáticamente.\n\n"
+            "4️⃣ *¿Cuánto dura la suscripción?*\n"
+            "Cada pago aprobado activa tu pantalla por exactamente **30 días**."
+        )
+        teclado_faq = {
+            "inline_keyboard": [
+                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
+            ]
+        }
+        if es_callback and editar_mensaje_callback:
+            editar_mensaje_callback(chat_id, message_id, mensaje_faq, teclado_faq)
+        else:
+            enviar_mensaje_callback(chat_id, mensaje_faq, teclado_faq)
+        return
 
     else:
         mensaje = "¡Hola! Selecciona una opción del menú de abajo:"
@@ -1977,7 +2004,6 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
                 [{"text": "❌ Rechazar (Eliminar Fila)", "callback_data": f"rechazar_{row_idx_pendiente}"}]
             ]
         }
-        # Nota: aquí corregimos el parámetro photo_file_id por mensaje de texto para el reporte por texto
         enviar_cb(int(ADMIN_ID), texto_admin, teclado_admin)
 
     enviar_cb(chat_id, "✅ Reporte enviado con éxito al administrador. En breve verificaremos tu referencia.", get_main_menu_keyboard())
