@@ -32,7 +32,7 @@ asistente_edicion_admin = {}
 asistente_cupon_admin = {}
 esperando_codigo_cupon_cliente = {} 
 detalles_pago_activos = {} 
-asistente_difusion_admin = {} # Memoria para plantillas y mensajes globales
+asistente_difusion_admin = {} # Memoria para plantillas y mensajes CRM (global e individual)
 
 
 def safe_get(row_dict, key, default=""):
@@ -121,21 +121,70 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión y control completo de cupones, cuentas y mensajería desde /admin."""
+    """Cerebro industrial con gestión y control completo de cupones, cuentas y CRM de mensajería desde /admin."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
 
     # -------------------------------------------------------------
-    # ASISTENTE ADMIN: DIFUSIÓN Y MENSAJERÍA PROFESIONAL
+    # ASISTENTE ADMIN: DIFUSIÓN Y MENSAJERÍA (GLOBAL O INDIVIDUAL)
     # -------------------------------------------------------------
     if not es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and str_chat_id in asistente_difusion_admin and texto:
         sesion_dif = asistente_difusion_admin[str_chat_id]
+        alcance = sesion_dif.get("alcance")
         tipo_plantilla = sesion_dif.get("tipo")
         parametro = texto.strip()
+
+        if alcance == "individual":
+            if "telegram_id_target" not in sesion_dif:
+                if not parametro.isdigit():
+                    enviar_mensaje_callback(
+                        chat_id, 
+                        "⚠️ El Telegram ID debe ser un número válido. Por favor, escribe el ID correcto del usuario:",
+                        {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]}
+                    )
+                    return
+
+                sesion_dif["telegram_id_target"] = parametro
+                
+                if tipo_plantilla == "sospechoso":
+                    prompt_detalle = f"🚨 *USUARIO DESTINO:* `{parametro}`\n\nAhora escribe la **infracción o motivo específico** (Ej: `Uso simultáneo en más de 2 dispositivos` o `Uso indebido de credenciales`):"
+                else:
+                    prompt_detalle = f"💬 *USUARIO DESTINO:* `{parametro}`\n\nAhora escribe el **mensaje personalizado** que deseas enviarle a este usuario:"
+
+                enviar_mensaje_callback(chat_id, prompt_detalle, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]})
+                return
+            else:
+                tid_destino = sesion_dif["telegram_id_target"]
+                asistente_difusion_admin.pop(str_chat_id, None)
+
+                if tipo_plantilla == "sospechoso":
+                    mensaje_final = (
+                        "⚠️ *AVISO IMPORTANTE DE SEGURIDAD Y TÉRMINOS* ⚠️\n\n"
+                        f"Estimado usuario, hemos detectado la siguiente incidencia en su cuenta: *{parametro}*.\n\n"
+                        "Recordamos que compartir credenciales o usar más dispositivos de los permitidos viola nuestros términos de servicio y puede ocasionar la suspensión definitiva. Por favor, regularice su situación a la brevedad."
+                    )
+                else:
+                    mensaje_final = parametro
+
+                try:
+                    enviar_mensaje_callback(int(tid_destino), mensaje_final, get_main_menu_keyboard())
+                    enviar_mensaje_callback(
+                        chat_id,
+                        f"✅ *¡Mensaje enviado con éxito al usuario!*\n\n• *Telegram ID:* `{tid_destino}`\n• *Contenido:* {mensaje_final}",
+                        {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                    )
+                except Exception as e:
+                    enviar_mensaje_callback(
+                        chat_id,
+                        f"❌ No se pudo enviar el mensaje al ID `{tid_destino}`. Es posible que el usuario no tenga abierto el bot.\nError: {e}",
+                        {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                    )
+                return
+
+        # Si el alcance es GLOBAL (Masivo)
         asistente_difusion_admin.pop(str_chat_id, None)
 
-        # Construir mensaje profesional según la plantilla elegida
         if tipo_plantilla == "cupon":
             mensaje_final = (
                 "🎟️ *¡NUEVO CUPÓN DE DESCUENTO DISPONIBLE!* 🎟️\n\n"
@@ -144,24 +193,17 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             )
         elif tipo_plantilla == "novedad":
             mensaje_final = (
-                "📢 *¡NUEVEDADES EN NUESTRO SERVICIO!* 📢\n\n"
+                "📢 *¡NOVEDADES EN NUESTRO SERVICIO!* 📢\n\n"
                 f"{parametro}\n\n"
                 "✨ Gracias por confiar en nosotros."
-            )
-        elif tipo_plantilla == "sospechoso":
-            mensaje_final = (
-                "⚠️ *AVISO IMPORTANTE DE SEGURIDAD Y TÉRMINOS* ⚠️\n\n"
-                f"Estimado usuario, hemos detectado la siguiente incidencia en su cuenta: *{parametro}*.\n\n"
-                "Recordamos que compartir credenciales o usar más dispositivos de los permitidos viola nuestros términos de servicio y puede ocasionar la suspensión definitiva. Por favor, regularice su situación a la brevedad."
             )
         else:
             mensaje_final = parametro
 
-        # Enviar de forma masiva a todos los clientes únicos registrados
         enviados = enviar_difusion_masiva(mensaje_final, enviar_mensaje_callback)
         enviar_mensaje_callback(
             chat_id,
-            f"✅ *Difusión completada con éxito.*\n\nMensaje enviado a *{enviados}* clientes únicos.",
+            f"✅ *Difusión masiva completada con éxito.*\n\nMensaje enviado a *{enviados}* clientes únicos.",
             {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
         )
         return
@@ -728,19 +770,21 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # CENTRO DE MENSAJERÍA Y DIFUSIÓN PROFESIONAL (CRM)
+    # CENTRO DE MENSAJERÍA Y DIFUSIÓN REORGANIZADO (CRM)
     # -------------------------------------------------------------
     elif accion == "admin_mensajeria":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
+            if str_chat_id in asistente_difusion_admin:
+                asistente_difusion_admin.pop(str_chat_id)
+
             texto_msg = (
-                "📢 *CENTRO DE MENSAJERÍA Y DIFUSIÓN (CRM)*\n\n"
-                "Selecciona una plantilla profesional para enviar comunicados instantáneos a todos los usuarios activos de la plataforma:"
+                "📢 *CENTRO DE MENSAJERÍA Y COMUNICACIÓN (CRM)*\n\n"
+                "¿Qué tipo de gestión de mensajes deseas realizar?"
             )
             teclado_msg = {
                 "inline_keyboard": [
-                    [{"text": "🎟️ Enviar Anuncio de Cupón", "callback_data": "admin_plantilla_cupon"}],
-                    [{"text": "✨ Enviar Novedad / Actualización", "callback_data": "admin_plantilla_novedad"}],
-                    [{"text": "⚠️ Aviso por Incumplimiento (Sospechoso)", "callback_data": "admin_plantilla_sospechoso"}],
+                    [{"text": "🌐 Difusión Masiva (A todos los usuarios)", "callback_data": "admin_alcance_global"}],
+                    [{"text": "👤 Contactar / Reportar a un Usuario Específico", "callback_data": "admin_alcance_individual"}],
                     [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
                 ]
             }
@@ -750,19 +794,79 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, texto_msg, teclado_msg)
         return
 
-    elif accion.startswith("admin_plantilla_"):
+    elif accion == "admin_alcance_global":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            texto_g = (
+                "🌐 *DIFUSIÓN MASIVA (GLOBAL)*\n\n"
+                "Selecciona la plantilla profesional que deseas enviar a toda la base de clientes:"
+            )
+            teclado_g = {
+                "inline_keyboard": [
+                    [{"text": "🎟️ Anuncio de Cupón Relámpago", "callback_data": "admin_tipo_global_cupon"}],
+                    [{"text": "✨ Novedad o Actualización General", "callback_data": "admin_tipo_global_novedad"}],
+                    [{"text": "🔙 Volver", "callback_data": "admin_mensajeria"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_g, teclado_g)
+            else:
+                enviar_mensaje_callback(chat_id, texto_g, teclado_g)
+        return
+
+    elif accion == "admin_alcance_individual":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            texto_i = (
+                "👤 *MENSAJERÍA INDIVIDUAL / PRIVADA*\n\n"
+                "Selecciona el tipo de aviso que deseas enviar a ese usuario específico:"
+            )
+            teclado_i = {
+                "inline_keyboard": [
+                    [{"text": "⚠️ Aviso por Usuario Sospechoso / Infracción", "callback_data": "admin_tipo_ind_sospechoso"}],
+                    [{"text": "💬 Mensaje Personalizado / Soporte Directo", "callback_data": "admin_tipo_ind_libre"}],
+                    [{"text": "🔙 Volver", "callback_data": "admin_mensajeria"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_i, teclado_i)
+            else:
+                enviar_mensaje_callback(chat_id, texto_i, teclado_i)
+        return
+
+    elif accion.startswith("admin_tipo_global_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             tipo = accion.split("_")[-1]
-            asistente_difusion_admin[str_chat_id] = {"tipo": tipo}
+            asistente_difusion_admin[str_chat_id] = {"alcance": "global", "tipo": tipo}
 
             if tipo == "cupon":
-                instruccion = "🎟️ *PLANTILLA: CUPÓN*\n\nEscribe únicamente el **código del cupón** (Ej: `VIP2026`) que deseas difundir masivamente:"
-            elif tipo == "novedad":
-                instruccion = "✨ *PLANTILLA: NOVEDAD*\n\nEscribe el **texto de la novedad o anuncio** que deseas enviar a todos los clientes:"
+                instruccion = "🎟️ *DIFUSIÓN GLOBAL: CUPÓN*\n\nEscribe únicamente el **código del cupón** (Ej: `VIP2026`) que deseas enviar a todos:"
             else:
-                instruccion = "⚠️ *PLANTILLA: AVISO DE INCUMPLIMIENTO*\n\nEscribe la **infrinción detectada** (Ej: `Uso simultáneo en más de 2 dispositivos`):"
+                instruccion = "✨ *DIFUSIÓN GLOBAL: NOVEDAD*\n\nEscribe el **texto del anuncio** que deseas enviar masivamente:"
 
-            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]}
+            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_alcance_global"}]]}
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, instruccion, teclado_canc)
+            else:
+                enviar_mensaje_callback(chat_id, instruccion, teclado_canc)
+        return
+
+    elif accion.startswith("admin_tipo_ind_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            tipo = accion.split("_")[-1]
+            asistente_difusion_admin[str_chat_id] = {"alcance": "individual", "tipo": tipo}
+
+            if tipo == "sospechoso":
+                instruccion = (
+                    "⚠️ *AVISO A USUARIO SOSPECHOSO*\n\n"
+                    "Paso 1: Escribe el **Telegram ID** del usuario que está infringiendo las normas (Ej: `123456789`):\n\n"
+                    "💡 *Tip:* Puedes copiar el ID directamente desde el buscador o reporte de pagos del panel admin."
+                )
+            else:
+                instruccion = (
+                    "💬 *MENSAJE DIRECTO A USUARIO*\n\n"
+                    "Paso 1: Escribe el **Telegram ID** del usuario al que deseas contactar:"
+                )
+
+            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_alcance_individual"}]]}
             if es_callback and editar_mensaje_callback:
                 editar_mensaje_callback(chat_id, message_id, instruccion, teclado_canc)
             else:
@@ -1453,7 +1557,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 es_efectivo = (len(partes_ap) > 2 and partes_ap[2].strip() == "efectivo")
                 metodo_pago = "Efectivo" if es_efectivo else "Pago Móvil / Digital"
 
-                # Quitamos los botones del mensaje original de inmediato
                 if message_id:
                     quitar_botones_telegram(chat_id, message_id)
 
@@ -1517,7 +1620,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_rechazado = safe_get(fila_obj, "Servicio", "Streaming")
 
-                # Quitamos los botones del mensaje original de inmediato
                 if message_id:
                     quitar_botones_telegram(chat_id, message_id)
 
@@ -1890,7 +1992,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         )
         teclado_term = {
             "inline_keyboard": [
-                [{"text": "🔙 Volver al Soporte", "callback_data": "soporte"}]
+                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
             ]
         }
         if es_callback and editar_mensaje_callback:
@@ -1920,7 +2022,7 @@ def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
                 try:
                     enviar_msg_cb(int(tid), texto_mensaje, get_main_menu_keyboard())
                     contador += 1
-                    time.sleep(0.1) # Pequeña pausa para no saturar la API de Telegram
+                    time.sleep(0.1)
                 except Exception as e:
                     print(f"No se pudo enviar difusión a {tid}: {e}")
         return contador
