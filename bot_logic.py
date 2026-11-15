@@ -9,7 +9,7 @@ WHATSAPP_NUMERO = "584247091547"
 ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 
 # =============================================================
-# CONFIGURACIÓN DE PRECIOS Y CACHÉ INTELIGENTE (ANTI-ERROR 429)
+# CONFIGURACIÓN DE PRECIOS (USD/USDT) Y DATOS DE PAGO MÓVIL
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
@@ -19,14 +19,11 @@ PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
-# Sistema de Caché en memoria para evitar saturar Google Sheets (Error 429)
-cache_sheets_memoria = {}
-TIEMPO_CACHE_SEGUNDOS = 20
-
 control_intentos_otp = {}
 MAX_INTENTOS_RAPIDOS = 2
 COOLDOWN_SEGUNDOS = 180
 
+# Control de estados temporales, asistentes y memoria temporal de pagos/cupones/difusión
 esperando_captura_pago = {}
 esperando_nuevo_nombre_perfil = {}
 esperando_busqueda_admin = {}
@@ -34,34 +31,8 @@ asistente_cuenta_datos = {}
 asistente_edicion_admin = {}
 asistente_cupon_admin = {}
 esperando_codigo_cupon_cliente = {} 
-detalles_pago_activos = {}
-
-
-def invalidar_cache_sheets():
-    """Limpia la caché de memoria para forzar la lectura actualizada tras cualquier cambio."""
-    global cache_sheets_memoria
-    cache_sheets_memoria.clear()
-
-
-def obtener_registros_con_cache(sheet_obj, clave_cache):
-    """Obtiene los registros de una hoja de Google con caché de corta duración para evitar el error 429."""
-    global cache_sheets_memoria
-    ahora = time.time()
-    
-    if clave_cache in cache_sheets_memoria:
-        registros, timestamp = cache_sheets_memoria[clave_cache]
-        if ahora - timestamp < TIEMPO_CACHE_SEGUNDOS:
-            return registros
-            
-    try:
-        registros = sheet_obj.get_all_records()
-        cache_sheets_memoria[clave_cache] = (registros, ahora)
-        return registros
-    except Exception as e:
-        # Si la API se satura temporalmente, devolvemos datos en caché si existen para no colapsar
-        if clave_cache in cache_sheets_memoria:
-            return cache_sheets_memoria[clave_cache][0]
-        raise e
+detalles_pago_activos = {} 
+asistente_difusion_admin = {} # Memoria para plantillas y mensajes globales
 
 
 def safe_get(row_dict, key, default=""):
@@ -116,7 +87,7 @@ def existen_cupones_activos():
         sheet_principal = conectar_sheets()
         spreadsheet = sheet_principal.spreadsheet
         sheet_cupones = spreadsheet.worksheet("Cupones")
-        registros = obtener_registros_con_cache(sheet_cupones, "cupones")
+        registros = sheet_cupones.get_all_records()
         
         ahora = datetime.datetime.now()
         for row in registros:
@@ -150,10 +121,50 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión y control completo de cupones y cuentas desde /admin."""
+    """Cerebro industrial con gestión y control completo de cupones, cuentas y mensajería desde /admin."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
+
+    # -------------------------------------------------------------
+    # ASISTENTE ADMIN: DIFUSIÓN Y MENSAJERÍA PROFESIONAL
+    # -------------------------------------------------------------
+    if not es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and str_chat_id in asistente_difusion_admin and texto:
+        sesion_dif = asistente_difusion_admin[str_chat_id]
+        tipo_plantilla = sesion_dif.get("tipo")
+        parametro = texto.strip()
+        asistente_difusion_admin.pop(str_chat_id, None)
+
+        # Construir mensaje profesional según la plantilla elegida
+        if tipo_plantilla == "cupon":
+            mensaje_final = (
+                "🎟️ *¡NUEVO CUPÓN DE DESCUENTO DISPONIBLE!* 🎟️\n\n"
+                f"Usa el código `{parametro.upper()}` al momento de renovar o comprar tu pantalla para disfrutar de un descuento especial.\n\n"
+                "🤖 Entra a nuestro bot para canjearlo ahora mismo."
+            )
+        elif tipo_plantilla == "novedad":
+            mensaje_final = (
+                "📢 *¡NUEVEDADES EN NUESTRO SERVICIO!* 📢\n\n"
+                f"{parametro}\n\n"
+                "✨ Gracias por confiar en nosotros."
+            )
+        elif tipo_plantilla == "sospechoso":
+            mensaje_final = (
+                "⚠️ *AVISO IMPORTANTE DE SEGURIDAD Y TÉRMINOS* ⚠️\n\n"
+                f"Estimado usuario, hemos detectado la siguiente incidencia en su cuenta: *{parametro}*.\n\n"
+                "Recordamos que compartir credenciales o usar más dispositivos de los permitidos viola nuestros términos de servicio y puede ocasionar la suspensión definitiva. Por favor, regularice su situación a la brevedad."
+            )
+        else:
+            mensaje_final = parametro
+
+        # Enviar de forma masiva a todos los clientes únicos registrados
+        enviados = enviar_difusion_masiva(mensaje_final, enviar_mensaje_callback)
+        enviar_mensaje_callback(
+            chat_id,
+            f"✅ *Difusión completada con éxito.*\n\nMensaje enviado a *{enviados}* clientes únicos.",
+            {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+        )
+        return
 
     # -------------------------------------------------------------
     # CLIENTE: VALIDACIÓN DE CÓDIGO DE CUPÓN ESCRITO
@@ -199,7 +210,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         try:
             row_idx_target = int(accion.split("_")[-1])
             sheet = conectar_sheets()
-            registros = obtener_registros_con_cache(sheet, "clientes")
+            registros = sheet.get_all_records()
             fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
             srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
@@ -357,7 +368,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         "Activa",
                         pins_formato_texto
                     ])
-                    invalidar_cache_sheets()
 
                     asistente_cuenta_datos.pop(str_chat_id)
 
@@ -398,7 +408,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             try:
                 sheet = conectar_sheets()
                 sheet.update_cell(row_idx, 5, nueva_fecha)
-                invalidar_cache_sheets()
                 enviar_mensaje_callback(
                     chat_id,
                     f"✅ *¡Fecha de vencimiento actualizada con éxito!*\n\nLa fila {row_idx} ahora vence el: `{nueva_fecha}`",
@@ -485,7 +494,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         try:
             sheet = conectar_sheets()
-            registros = obtener_registros_con_cache(sheet, "clientes")
+            registros = sheet.get_all_records()
             fila_obj = registros[row_idx_perfil - 2] if (row_idx_perfil - 2) < len(registros) else {}
             
             servicio_perfil = safe_get(fila_obj, "Servicio", "Streaming")
@@ -500,7 +509,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
             nuevo_valor_celda = f"{numero_base} ({nuevo_nombre})"
             sheet.update_cell(row_idx_perfil, 4, nuevo_valor_celda)
-            invalidar_cache_sheets()
 
             if ADMIN_ID:
                 texto_admin = (
@@ -548,6 +556,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             esperando_codigo_cupon_cliente.pop(str_chat_id)
         if str_chat_id in detalles_pago_activos:
             detalles_pago_activos.pop(str_chat_id)
+        if str_chat_id in asistente_difusion_admin:
+            asistente_difusion_admin.pop(str_chat_id)
             
         texto_menu = (
             "🤖 *Bienvenido al servicio de Streaming*\n\n"
@@ -568,7 +578,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         
         try:
             sheet = conectar_sheets()
-            registros = obtener_registros_con_cache(sheet, "clientes")
+            registros = sheet.get_all_records()
             fila_obj = registros[row_idx_pendiente - 2] if (row_idx_pendiente - 2) < len(registros) else {}
             cuenta_asociada = safe_get(fila_obj, "Cuenta", "Por Asignar")
             servicio_asociado = safe_get(fila_obj, "Servicio", "Disney+")
@@ -673,7 +683,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUENTAS / CUPONES
+    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUENTAS / CUPONES / CRM
     # -------------------------------------------------------------
     if accion == "/admin" or accion == "admin_volver":
         if str_chat_id in esperando_captura_pago:
@@ -691,6 +701,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             esperando_codigo_cupon_cliente.pop(str_chat_id)
         if str_chat_id in detalles_pago_activos:
             detalles_pago_activos.pop(str_chat_id)
+        if str_chat_id in asistente_difusion_admin:
+            asistente_difusion_admin.pop(str_chat_id)
 
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             reporte = generar_reporte_admin()
@@ -700,6 +712,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     [{"text": "📋 Ver Pagos Pendientes", "callback_data": "admin_ver_pendientes"}],
                     [{"text": "🔑 Crear y Gestionar Cuentas (Stock)", "callback_data": "admin_gestionar_cuentas"}],
                     [{"text": "🎟️ Crear y Gestionar Cupones", "callback_data": "admin_gestionar_cupones"}],
+                    [{"text": "📢 Difusión y Mensajería (CRM)", "callback_data": "admin_mensajeria"}],
                     [{"text": "🔍 Buscar y Gestionar Cliente Activo", "callback_data": "admin_pedir_busqueda"}],
                     [{"text": "🗑️ Gestionar / Eliminar Vencidos", "callback_data": "admin_ver_vencidos"}],
                     [{"text": "📦 Asignar Stock Pendiente", "callback_data": "admin_asignar_stock"}],
@@ -712,6 +725,48 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, reporte, teclado)
         else:
             enviar_mensaje_callback(chat_id, "⛔ No tienes permisos para acceder a este panel.", get_main_menu_keyboard())
+        return
+
+    # -------------------------------------------------------------
+    # CENTRO DE MENSAJERÍA Y DIFUSIÓN PROFESIONAL (CRM)
+    # -------------------------------------------------------------
+    elif accion == "admin_mensajeria":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            texto_msg = (
+                "📢 *CENTRO DE MENSAJERÍA Y DIFUSIÓN (CRM)*\n\n"
+                "Selecciona una plantilla profesional para enviar comunicados instantáneos a todos los usuarios activos de la plataforma:"
+            )
+            teclado_msg = {
+                "inline_keyboard": [
+                    [{"text": "🎟️ Enviar Anuncio de Cupón", "callback_data": "admin_plantilla_cupon"}],
+                    [{"text": "✨ Enviar Novedad / Actualización", "callback_data": "admin_plantilla_novedad"}],
+                    [{"text": "⚠️ Aviso por Incumplimiento (Sospechoso)", "callback_data": "admin_plantilla_sospechoso"}],
+                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_msg, teclado_msg)
+            else:
+                enviar_mensaje_callback(chat_id, texto_msg, teclado_msg)
+        return
+
+    elif accion.startswith("admin_plantilla_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            tipo = accion.split("_")[-1]
+            asistente_difusion_admin[str_chat_id] = {"tipo": tipo}
+
+            if tipo == "cupon":
+                instruccion = "🎟️ *PLANTILLA: CUPÓN*\n\nEscribe únicamente el **código del cupón** (Ej: `VIP2026`) que deseas difundir masivamente:"
+            elif tipo == "novedad":
+                instruccion = "✨ *PLANTILLA: NOVEDAD*\n\nEscribe el **texto de la novedad o anuncio** que deseas enviar a todos los clientes:"
+            else:
+                instruccion = "⚠️ *PLANTILLA: AVISO DE INCUMPLIMIENTO*\n\nEscribe la **infrinción detectada** (Ej: `Uso simultáneo en más de 2 dispositivos`):"
+
+            teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_mensajeria"}]]}
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, instruccion, teclado_canc)
+            else:
+                enviar_mensaje_callback(chat_id, instruccion, teclado_canc)
         return
 
     elif accion == "admin_gestionar_cupones":
@@ -743,7 +798,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 spreadsheet = sheet_principal.spreadsheet
                 try:
                     sheet_cupones = spreadsheet.worksheet("Cupones")
-                    registros = obtener_registros_con_cache(sheet_cupones, "cupones")
+                    registros = sheet_cupones.get_all_records()
                 except Exception:
                     registros = []
 
@@ -805,7 +860,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_cupones = spreadsheet.worksheet("Cupones")
                 
                 sheet_cupones.delete_rows(row_idx_cupon)
-                invalidar_cache_sheets()
                 
                 texto_editado = "🗑️ *Cupón eliminado exitosamente de la base de datos.*"
                 teclado_fin = {
@@ -893,7 +947,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 spreadsheet = sheet_principal.spreadsheet
                 try:
                     sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                    registros_c = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+                    registros_c = sheet_cuentas.get_all_records()
                 except Exception:
                     registros_c = []
 
@@ -951,7 +1005,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
                 
                 sheet_cuentas.delete_rows(row_idx_cuenta)
-                invalidar_cache_sheets()
                 
                 texto_editado = "🗑️ *Cuenta maestra eliminada exitosamente del inventario.*"
                 teclado_fin = {
@@ -1017,7 +1070,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             try:
                 row_idx = int(accion.split("_")[-1])
                 sheet = conectar_sheets()
-                registros = obtener_registros_con_cache(sheet, "clientes")
+                registros = sheet.get_all_records()
                 fila = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
 
                 nombre_c = safe_get(fila, "Nombre", "Cliente")
@@ -1057,9 +1110,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_principal = conectar_sheets()
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+                registros_cuentas = sheet_cuentas.get_all_records()
 
-                registros_clientes = obtener_registros_con_cache(sheet_principal, "clientes")
+                registros_clientes = sheet_principal.get_all_records()
                 fila_actual = registros_clientes[row_idx - 2] if (row_idx - 2) < len(registros_clientes) else {}
                 srv_cliente = safe_get(fila_actual, "Servicio", "Disney+").lower()
 
@@ -1114,7 +1167,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 pins_texto = fila_cuenta[6] if len(fila_cuenta) > 6 else ""
 
                 limite_max = 5 if "netflix" in srv_cuenta.lower() else 7
-                registros_clientes = obtener_registros_con_cache(sheet_principal, "clientes")
+                registros_clientes = sheet_principal.get_all_records()
 
                 perfiles_ocupados = set()
                 for r in registros_clientes:
@@ -1168,14 +1221,14 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
 
-                registros_clientes = obtener_registros_con_cache(sheet_principal, "clientes")
+                registros_clientes = sheet_principal.get_all_records()
                 fila_anterior = registros_clientes[row_idx - 2] if (row_idx - 2) < len(registros_clientes) else {}
                 correo_viejo = safe_get(fila_anterior, "Cuenta", "")
                 tid_cliente = safe_get(fila_anterior, "Telegram_ID", "")
                 srv_cliente = safe_get(fila_anterior, "Servicio", "Disney+")
 
                 if correo_viejo and "pendiente" not in correo_viejo.lower():
-                    registros_c = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+                    registros_c = sheet_cuentas.get_all_records()
                     for idx_c, c_row in enumerate(registros_c, start=2):
                         if safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", "")).lower() == correo_viejo.lower():
                             ocu_v = int(safe_get(c_row, "Perfiles Ocupados", "1"))
@@ -1199,7 +1252,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 nuevo_perfil_str = f"Perfil {num_perfil}"
                 sheet_principal.update_cell(row_idx, 3, correo_nuevo)
                 sheet_principal.update_cell(row_idx, 4, nuevo_perfil_str)
-                invalidar_cache_sheets()
 
                 pin_nuevo = obtener_pin_asignado_cliente(correo_nuevo, nuevo_perfil_str)
 
@@ -1321,7 +1373,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 row_idx_expulsar = int(accion.split("_")[-1])
                 
                 sheet_principal = conectar_sheets()
-                registros = obtener_registros_con_cache(sheet_principal, "clientes")
+                registros = sheet_principal.get_all_records()
                 fila_obj = registros[row_idx_expulsar - 2] if (row_idx_expulsar - 2) < len(registros) else {}
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_exp = safe_get(fila_obj, "Servicio", "Streaming")
@@ -1401,6 +1453,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 es_efectivo = (len(partes_ap) > 2 and partes_ap[2].strip() == "efectivo")
                 metodo_pago = "Efectivo" if es_efectivo else "Pago Móvil / Digital"
 
+                # Quitamos los botones del mensaje original de inmediato
                 if message_id:
                     quitar_botones_telegram(chat_id, message_id)
 
@@ -1459,11 +1512,12 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 row_idx = int(accion.split("_")[1])
                 
                 sheet_principal = conectar_sheets()
-                registros = obtener_registros_con_cache(sheet_principal, "clientes")
+                registros = sheet_principal.get_all_records()
                 fila_obj = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_rechazado = safe_get(fila_obj, "Servicio", "Streaming")
 
+                # Quitamos los botones del mensaje original de inmediato
                 if message_id:
                     quitar_botones_telegram(chat_id, message_id)
 
@@ -1696,7 +1750,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         try:
             row_idx_elegido = int(accion.split("_")[-1])
             sheet = conectar_sheets()
-            registros = obtener_registros_con_cache(sheet, "clientes")
+            registros = sheet.get_all_records()
             fila_obj = registros[row_idx_elegido - 2] if (row_idx_elegido - 2) < len(registros) else {}
             srv_fila = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_fila else "disney"
@@ -1752,7 +1806,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         try:
             row_idx_target = int(accion.split("_")[-1])
             sheet = conectar_sheets()
-            registros = obtener_registros_con_cache(sheet, "clientes")
+            registros = sheet.get_all_records()
             fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
             srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
@@ -1836,7 +1890,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         )
         teclado_term = {
             "inline_keyboard": [
-                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
+                [{"text": "🔙 Volver al Soporte", "callback_data": "soporte"}]
             ]
         }
         if es_callback and editar_mensaje_callback:
@@ -1849,6 +1903,30 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         mensaje = "¡Hola! Selecciona una opción del menú de abajo:"
         teclado = get_main_menu_keyboard()
         enviar_mensaje_callback(chat_id, mensaje, teclado)
+
+
+def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
+    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets."""
+    try:
+        sheet = conectar_sheets()
+        registros = sheet.get_all_records()
+        telegrams_enviados = set()
+        contador = 0
+
+        for r in registros:
+            tid = safe_get(r, "Telegram_ID", "")
+            if tid and tid not in telegrams_enviados and tid != ADMIN_ID:
+                telegrams_enviados.add(tid)
+                try:
+                    enviar_msg_cb(int(tid), texto_mensaje, get_main_menu_keyboard())
+                    contador += 1
+                    time.sleep(0.1) # Pequeña pausa para no saturar la API de Telegram
+                except Exception as e:
+                    print(f"No se pudo enviar difusión a {tid}: {e}")
+        return contador
+    except Exception as e:
+        print(f"Error en difusión masiva: {e}")
+        return 0
 
 
 def preguntar_por_cupon_pago(chat_id, str_chat_id, servicio_clave, tipo_operacion, row_idx_target, message_id, enviar_cb, editar_cb, es_cb):
@@ -1879,7 +1957,7 @@ def validar_y_consumir_cupon(codigo_ingresado):
         except Exception:
             return False, "❌ El cupón ingresado no existe."
 
-        registros = obtener_registros_con_cache(sheet_cupones, "cupones")
+        registros = sheet_cupones.get_all_records()
         ahora = datetime.datetime.now()
 
         for idx, row in enumerate(registros, start=2):
@@ -1903,7 +1981,6 @@ def validar_y_consumir_cupon(codigo_ingresado):
                                 
                                 if ahora > fecha_expiracion:
                                     sheet_cupones.update_cell(idx, 8, "Expirado")
-                                    invalidar_cache_sheets()
                                     return False, "⏳ ¡Este cupón relámpago ya expiró!"
                                 break
                             except ValueError:
@@ -1914,13 +1991,11 @@ def validar_y_consumir_cupon(codigo_ingresado):
 
                 if veces_usado >= usos_max:
                     sheet_cupones.update_cell(idx, 8, "Agotado")
-                    invalidar_cache_sheets()
                     return False, "❌ Este cupón ya alcanzó su límite máximo de usos."
 
                 sheet_cupones.update_cell(idx, 7, veces_usado + 1)
                 if (veces_usado + 1) >= usos_max and duracion_horas == 0:
                     sheet_cupones.update_cell(idx, 8, "Agotado")
-                invalidar_cache_sheets()
 
                 tipo_desc = safe_get(row, "Tipo", "Fijo")
                 valor_desc = float(safe_get(row, "Valor", "0"))
@@ -1960,9 +2035,8 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
     try:
         sheet = conectar_sheets()
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-        invalidar_cache_sheets()
         
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
         if "pendiente de stock" in safe_get(fila_obj, "Cuenta", "").lower():
             sin_stock = True
@@ -2053,7 +2127,6 @@ def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
             str(veces_usado),
             estado
         ])
-        invalidar_cache_sheets()
 
         asistente_cupon_admin.pop(str(chat_id), None)
 
@@ -2089,7 +2162,7 @@ def obtener_pin_asignado_cliente(correo_cuenta, nombre_perfil):
         sheet_principal = conectar_sheets()
         spreadsheet = sheet_principal.spreadsheet
         sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        registros = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+        registros = sheet_cuentas.get_all_records()
 
         num_perfil_limpio = "Perfil 1"
         for n in range(1, 10):
@@ -2159,7 +2232,6 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
         if "pendiente" in estado_actual:
             if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
                 sheet_principal.update_cell(row_idx, 6, "Activo")
-                invalidar_cache_sheets()
                 print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
             else:
                 correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
@@ -2167,7 +2239,7 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
                     try:
                         spreadsheet = sheet_principal.spreadsheet
                         sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                        registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+                        registros_cuentas = sheet_cuentas.get_all_records()
                         for idx_c, c_row in enumerate(registros_cuentas, start=2):
                             correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
                             if correo_cta.lower() == correo_a_liberar.lower():
@@ -2180,7 +2252,6 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
                     except Exception as e:
                         print(f"Aviso al liberar stock en cancelación: {e}")
                 sheet_principal.delete_rows(row_idx)
-                invalidar_cache_sheets()
                 print(f"Fila nueva {row_idx} eliminada por cancelación.")
     except Exception as e:
         print(f"Error en limpieza segura de fila: {e}")
@@ -2197,7 +2268,6 @@ def rechazar_pago_seguro(row_idx):
 
         if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
             sheet_principal.update_cell(row_idx, 6, "Activo")
-            invalidar_cache_sheets()
             return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
         else:
             resultado = liberar_y_eliminar_fila_suscripcion(row_idx)
@@ -2210,7 +2280,7 @@ def rechazar_pago_seguro(row_idx):
 def notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_target, detalle_operacion, enviar_cb, editar_cb=None, message_id=None, es_cb=False):
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
         servicio_elegido = safe_get(fila_obj, "Servicio", "Disney+")
         perfil_asignado = safe_get(fila_obj, "Pantalla", "Perfil 1")
@@ -2218,7 +2288,6 @@ def notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_targ
         precio_usd = PRECIO_NETFLIX_USD if "netflix" in str(servicio_elegido).lower() else PRECIO_DISNEY_USD
 
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-        invalidar_cache_sheets()
 
         aviso_stock = ""
         if "pendiente de stock" in str(cuenta_asignada).lower():
@@ -2321,13 +2390,13 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if es_cb and editar_cb:
         editar_cb(chat_id, message_id, mensaje, teclado)
     else:
-        enviar_cb(msg_espera) # Corregido mensaje por defecto
+        enviar_cb(chat_id, mensaje, teclado)
 
 
 def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat_id, row_idx_pendiente, enviar_foto_callback):
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         fila_obj = registros[row_idx_pendiente - 2] if (row_idx_pendiente - 2) < len(registros) else {}
         cuenta_asociada = safe_get(fila_obj, "Cuenta", "Por Asignar")
         servicio_asociado = safe_get(fila_obj, "Servicio", "Disney+")
@@ -2376,7 +2445,7 @@ def obtener_primer_perfil_disponible(sheet, servicio_solicitado, correo_asignado
         es_netflix = "netflix" in servicio_solicitado.lower()
         limite_maximo = 5 if es_netflix else 7
 
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         perfiles_ocupados_en_cuenta = set()
 
         for r in registros:
@@ -2407,7 +2476,7 @@ def asignar_correo_desde_stock(sheet_principal, servicio_solicitado, chat_id="",
         except Exception:
             return "Por Asignar"
 
-        registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+        registros_cuentas = sheet_cuentas.get_all_records()
         
         for idx_c, cuenta_row in enumerate(registros_cuentas, start=2):
             srv_cuenta = safe_get(cuenta_row, "Servicio", "").lower()
@@ -2427,11 +2496,9 @@ def asignar_correo_desde_stock(sheet_principal, servicio_solicitado, chat_id="",
                     
                     nuevos_ocupados = ocupados + 1
                     sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                    invalidar_cache_sheets()
                     
                     if nuevos_ocupados >= capacidad:
                         sheet_cuentas.update_cell(idx_c, 6, "Llena")
-                        invalidar_cache_sheets()
                         if ADMIN_ID and enviar_mensaje_callback:
                             alerta_stock = (
                                 f"⚠️ *¡ALERTA DE STOCK AGOTADO!* ⚠️\n\n"
@@ -2474,8 +2541,8 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
         except Exception:
             return "❌ No se encontró la pestaña 'Cuentas' en el Google Sheets."
 
-        registros_clientes = obtener_registros_con_cache(sheet_principal, "clientes")
-        registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+        registros_clientes = sheet_principal.get_all_records()
+        registros_cuentas = sheet_cuentas.get_all_records()
         
         asignados_count = 0
 
@@ -2514,7 +2581,6 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
                     
                     sheet_principal.update_cell(idx_cli, 3, cuenta_encontrada)
                     sheet_principal.update_cell(idx_cli, 4, perfil_correcto)
-                    invalidar_cache_sheets()
                     
                     fila_c_actual = sheet_cuentas.row_values(idx_cuenta_encontrada)
                     try:
@@ -2524,13 +2590,11 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
                         
                     nuevos_ocupados = ocupados_actuales + 1
                     sheet_cuentas.update_cell(idx_cuenta_encontrada, 5, nuevos_ocupados)
-                    invalidar_cache_sheets()
                     
                     limite_defecto = 5 if "netflix" in servicio_cli.lower() else 7
                     capacidad_total = int(fila_c_actual[3]) if len(fila_c_actual) > 3 and fila_c_actual[3].isdigit() else limite_defecto
                     if nuevos_ocupados >= capacidad_total:
                         sheet_cuentas.update_cell(idx_cuenta_encontrada, 6, "Llena")
-                        invalidar_cache_sheets()
 
                     if tid_cliente and enviar_msg_cb and estado_cli == "activo":
                         try:
@@ -2549,7 +2613,7 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
                             print(f"No se pudo notificar al cliente {tid_cliente}: {e}")
 
                     asignados_count += 1
-                    registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+                    registros_cuentas = sheet_cuentas.get_all_records()
 
         if asignados_count > 0:
             return f"✅ ¡Proceso exitoso! Se han asignado cuentas nuevas a **{asignados_count}** cliente(s) que estaban en lista de espera."
@@ -2564,7 +2628,7 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
 def obtener_suscripciones_por_id(chat_id):
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         str_chat_id = str(chat_id).strip()
         resultados = []
         for idx, r in enumerate(registros, start=2):
@@ -2587,9 +2651,7 @@ def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disne
         perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio, correo_asignado)
         
         sheet.append_row([str(str_chat_id), nombre_completo, correo_asignado, perfil_asignado, "", "Pendiente Pago", servicio])
-        invalidar_cache_sheets()
-        registros_actuales = obtener_registros_con_cache(sheet, "clientes")
-        return len(registros_actuales) + 1
+        return len(sheet.get_all_records()) + 1
     except Exception as e:
         print(f"Error creando fila nueva: {e}")
         return 2
@@ -2607,7 +2669,7 @@ def verificar_cliente_activo(chat_id):
 def obtener_clientes_pendientes():
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         pendientes = []
         for idx, row in enumerate(registros, start=2):
             estado = safe_get(row, "Estado", "").lower()
@@ -2622,7 +2684,7 @@ def obtener_clientes_pendientes():
 def obtener_clientes_activos_general():
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         activos = []
         for idx, row in enumerate(registros, start=2):
             estado = safe_get(row, "Estado", "").lower()
@@ -2638,7 +2700,7 @@ def obtener_clientes_activos_general():
 def obtener_suscripciones_vencidas():
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         vencidos = []
         hoy = datetime.date.today()
 
@@ -2678,7 +2740,7 @@ def liberar_y_eliminar_fila_suscripcion(row_idx):
 
         correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
         
-        registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+        registros_cuentas = sheet_cuentas.get_all_records()
         cuenta_encontrada = False
 
         for idx_c, c_row in enumerate(registros_cuentas, start=2):
@@ -2691,18 +2753,15 @@ def liberar_y_eliminar_fila_suscripcion(row_idx):
 
                 nuevos_ocupados = max(0, ocupados - 1)
                 sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                invalidar_cache_sheets()
 
                 estado_actual = safe_get(c_row, "Estado", "").lower()
                 if estado_actual == "llena":
                     sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                    invalidar_cache_sheets()
 
                 cuenta_encontrada = True
                 break
 
         sheet_principal.delete_rows(row_idx)
-        invalidar_cache_sheets()
 
         msg_extra = " y se liberó un cupo en la cuenta maestra" if cuenta_encontrada else ""
         return f"✅ ¡Suscripción de la fila {row_idx} eliminada con éxito{msg_extra}!"
@@ -2715,7 +2774,7 @@ def liberar_y_eliminar_fila_suscripcion(row_idx):
 def aprobar_suscripcion_sheet(row_idx):
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         fila_actual = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
         tid_cliente = safe_get(fila_actual, "Telegram_ID", "")
         nombre_cliente = safe_get(fila_actual, "Nombre", "Cliente")
@@ -2745,7 +2804,6 @@ def aprobar_suscripcion_sheet(row_idx):
         
         sheet.update_cell(row_idx, 5, nueva_fecha)
         sheet.update_cell(row_idx, 6, "Activo")
-        invalidar_cache_sheets()
         
         return True, tid_cliente, False, nombre_cliente, servicio_fila, perfil_asignado, tipo_operacion, cuenta_fila
     except Exception as e:
@@ -2778,7 +2836,6 @@ def registrar_venta_en_historial(nombre_cliente, tid_cliente, servicio, perfil, 
             str(tipo_operacion),
             str(metodo_pago)
         ])
-        invalidar_cache_sheets()
     except Exception as e:
         print(f"Error al registrar la venta en el historial: {e}")
 
@@ -2802,7 +2859,7 @@ def verificar_alerta_vencimiento(vencimiento_str, estado_str):
 def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
-        registros = obtener_registros_con_cache(sheet, "clientes")
+        registros = sheet.get_all_records()
         activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
@@ -2826,7 +2883,7 @@ def generar_resumen_completo_negocio():
         sheet_principal = conectar_sheets()
         spreadsheet = sheet_principal.spreadsheet
         
-        registros_clientes = obtener_registros_con_cache(sheet_principal, "clientes")
+        registros_clientes = sheet_principal.get_all_records()
         total_pantallas = len(registros_clientes)
         activas_cli = sum(1 for r in registros_clientes if safe_get(r, "Estado", "").lower() == "activo")
         pendientes_pago = sum(1 for r in registros_clientes if "pendiente" in safe_get(r, "Estado", "").lower())
@@ -2844,7 +2901,7 @@ def generar_resumen_completo_negocio():
 
         try:
             sheet_cuentas = spreadsheet.worksheet("Cuentas")
-            registros_cuentas = obtener_registros_con_cache(sheet_cuentas, "cuentas")
+            registros_cuentas = sheet_cuentas.get_all_records()
             total_cuentas_maestras = len(registros_cuentas)
             for c in registros_cuentas:
                 est_c = safe_get(c, "Estado", "").lower()
@@ -2869,7 +2926,7 @@ def generar_resumen_completo_negocio():
         ventas_totales_count = 0
         try:
             sheet_ventas = spreadsheet.worksheet("Ventas")
-            registros_ventas = obtener_registros_con_cache(sheet_ventas, "ventas")
+            registros_ventas = sheet_ventas.get_all_records()
             ventas_totales_count = len(registros_ventas)
             for v in registros_ventas:
                 monto_str = safe_get(v, "Monto USD", "0").replace("$", "").strip()
