@@ -2060,7 +2060,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
 
 def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
-    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets."""
+    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets (incluyendo al admin si está registrado)."""
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
@@ -2068,8 +2068,10 @@ def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
         contador = 0
 
         for r in registros:
-            tid = safe_get(r, "Telegram_ID", "")
-            if tid and tid not in telegrams_enviados and tid != ADMIN_ID:
+            tid = safe_get(r, "Telegram_ID", "").strip()
+            # Quitamos la restricción de 'tid != ADMIN_ID' para que el administrador 
+            # también reciba la copia de prueba y compruebe que el sistema funciona correctamente.
+            if tid and tid not in telegrams_enviados:
                 telegrams_enviados.add(tid)
                 try:
                     enviar_msg_cb(int(tid), texto_mensaje, get_main_menu_keyboard())
