@@ -127,6 +127,24 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     accion = callback_data if es_callback else texto.lower().strip()
 
     # -------------------------------------------------------------
+    # CLIENTE: ACEPTAR TÉRMINOS Y NORMAS (BOTÓN OK)
+    # -------------------------------------------------------------
+    if es_callback and accion == "aceptar_terminos_ok":
+        try:
+            if message_id and editar_mensaje_callback:
+                editar_mensaje_callback(
+                    chat_id, 
+                    message_id, 
+                    "✅ *¡Normas aceptadas con éxito!*\n\nYa puedes disfrutar de tu servicio con total tranquilidad. Usa el menú principal cuando lo necesites.", 
+                    {"inline_keyboard": []}
+                )
+            else:
+                enviar_mensaje_callback(chat_id, "✅ ¡Gracias por confirmar! Disfruta tu contenido.", get_main_menu_keyboard())
+        except Exception as e:
+            print(f"Error al procesar OK de términos: {e}")
+        return
+
+    # -------------------------------------------------------------
     # ASISTENTE ADMIN: DIFUSIÓN Y MENSAJERÍA (GLOBAL O INDIVIDUAL)
     # -------------------------------------------------------------
     if not es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and str_chat_id in asistente_difusion_admin and texto:
@@ -137,7 +155,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         if alcance == "individual":
             if "telegram_id_target" not in sesion_dif:
-                # El admin escribió un término de búsqueda (nombre, usuario, correo)
                 termino_busqueda = parametro.lower()
                 activos = obtener_clientes_activos_general()
                 encontrados = []
@@ -162,7 +179,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     )
                     return
 
-                # Creamos botones con los resultados encontrados para que el admin solo tenga que hacer un toque
                 botones_resultados = []
                 for tid_u, nom_u, srv_u, cta_u in encontrados:
                     botones_resultados.append([{
@@ -178,7 +194,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 )
                 return
             else:
-                # Ya tenemos el ID seleccionado por botón y ahora el admin escribe el motivo o mensaje
                 tid_destino = sesion_dif["telegram_id_target"]
                 asistente_difusion_admin.pop(str_chat_id, None)
 
@@ -206,7 +221,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     )
                 return
 
-        # Si el alcance es GLOBAL (Masivo)
         asistente_difusion_admin.pop(str_chat_id, None)
 
         if tipo_plantilla == "cupon":
@@ -232,11 +246,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         )
         return
 
-    # Selección de usuario mediante botón tras la búsqueda inteligente
     if es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and accion.startswith("admin_enviar_a_"):
         try:
             partes = accion.split("_")
-            # Estructura: admin_enviar_a_[ID]_[tipo]
             tid_seleccionado = partes[3]
             tipo_plantilla = partes[4]
 
@@ -1639,16 +1651,43 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                                     f"Tu suscripción de *{srv_aprobado}* ({perfil_asignado}) está **Activa** con **prioridad #1**.\n"
                                     "⏳ Estamos preparando tu cuenta; te notificaremos en cuanto tu correo quede asignado."
                                 )
+                                teclado_cliente = get_main_menu_keyboard()
                             else:
-                                msg_cliente = (
-                                    "🎉 *¡Tu pago ha sido verificado y aprobado!*\n\n"
-                                    f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ya se encuentra *Activo* por 30 días más.\n"
-                                    f"• *PIN de seguridad:* `{pin_entregado}` 🔒\n\n"
-                                    "¡Disfruta tu contenido!"
-                                )
-                            enviar_mensaje_callback(int(tid_cliente), msg_cliente, get_main_menu_keyboard())
-                        except Exception:
-                            pass
+                                if tipo_operacion == "Pantalla Nueva":
+                                    msg_cliente = (
+                                        "🎉 *¡Tu pago ha sido verificado y aprobado!*\n\n"
+                                        f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ya se encuentra *Activo*.\n"
+                                        f"• *Correo:* `{cuenta_fila}`\n"
+                                        f"• *PIN de seguridad:* `{pin_entregado}` 🔒\n\n"
+                                        "📜 *NORMAS IMPORTANTES DE USO:*\n"
+                                        "1️⃣ Tu pantalla es para **1 solo dispositivo** en simultáneo.\n"
+                                        "2️⃣ Usa únicamente tu PIN asignado; está prohibido modificar perfiles ajenos.\n"
+                                        "3️⃣ No compartas tus datos de acceso.\n\n"
+                                        "Presiona el botón de abajo para confirmar que has leído y aceptas las normas:"
+                                    )
+                                    teclado_cliente = {
+                                        "inline_keyboard": [
+                                            [{"text": "✅ Entendido y Aceptado (OK)", "callback_data": "aceptar_terminos_ok"}],
+                                            [{"text": "📲 Ver mis datos", "callback_data": "ver_datos"}]
+                                        ]
+                                    }
+                                else:
+                                    msg_cliente = (
+                                        "🎉 *¡Renovación exitosa por 30 días más!*\n\n"
+                                        f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ha sido renovado.\n"
+                                        f"• *PIN de seguridad:* `{pin_entregado}` 🔒\n\n"
+                                        "💡 *Recuerda:* Mantén el uso de un solo dispositivo para evitar bloqueos en tu pantalla.\n\n"
+                                        "Presiona OK para confirmar:"
+                                    )
+                                    teclado_cliente = {
+                                        "inline_keyboard": [
+                                            [{"text": "✅ OK, entendido", "callback_data": "aceptar_terminos_ok"}]
+                                        ]
+                                    }
+
+                            enviar_mensaje_callback(int(tid_cliente), msg_cliente, teclado_cliente)
+                        except Exception as e:
+                            print(f"Error notificando al cliente: {e}")
                 else:
                     texto_res = f"❌ Error al actualizar la hoja de cálculo para la fila {row_idx}."
 
@@ -1741,7 +1780,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
+                    f"• *PIN:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -2069,8 +2108,6 @@ def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
 
         for r in registros:
             tid = safe_get(r, "Telegram_ID", "").strip()
-            # Quitamos la restricción de 'tid != ADMIN_ID' para que el administrador 
-            # también reciba la copia de prueba y compruebe que el sistema funciona correctamente.
             if tid and tid not in telegrams_enviados:
                 telegrams_enviados.add(tid)
                 try:
@@ -3016,7 +3053,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
