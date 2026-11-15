@@ -20,18 +20,13 @@ clics_procesados = {}
 def iniciar_reloj_alertas():
     """Ejecuta la revisión de vencimientos cada 24 horas (86400 segundos) en segundo plano."""
     def bucle_diario():
-        # Esperamos 30 segundos al encender el servidor para que FastAPI esté completamente listo
         time.sleep(30)
-        
         while True:
             try:
                 print("⏰ Ejecutando revisión automática diaria de vencimientos...")
-                # Llamamos a tu función de alertas pasándole la función nativa que ya tienes en este archivo
                 revisar_y_enviar_alertas_vencimiento(enviar_mensaje_telegram)
             except Exception as e:
                 print(f"Error en el bucle automático de alertas: {e}")
-                
-            # Esperar exactamente 24 horas (86400 segundos) antes de la próxima revisión
             time.sleep(86400)
 
     hilo = threading.Thread(target=bucle_diario, daemon=True)
@@ -42,7 +37,6 @@ def iniciar_reloj_alertas():
 @app.on_event("startup")
 def startup_event():
     print("¡El servidor, el lector de Gmail y el bot interactivo se han iniciado en Render!")
-    # INICIAMOS EL RELOJ DE ALERTAS AL ARRANCAR FASTAPI
     iniciar_reloj_alertas()
 
 
@@ -69,23 +63,23 @@ async def recibir_webhook(request: Request):
             
             # --- FILTRO ANTISPAM / DOBLE CLIC ESTRICTO ---
             ahora = time.time()
-            # Bloqueamos al usuario por su chat_id completo para que no pueda presionar NINGÚN botón en ráfaga
             if str(chat_id) in clics_procesados:
                 tiempo_transcurrido = ahora - clics_procesados[str(chat_id)]
-                if tiempo_transcurrido < 2.0:  # Tolera 2.0 segundos entre cualquier clic
+                if tiempo_transcurrido < 2.0:  # Si intenta repetir en menos de 2 segundos
+                    # ¡Solo al usuario ansioso le sale el aviso flotante!
                     responder_callback_telegram(callback_id, "⏳ ¡Acción en proceso, espera un momento!")
                     return {"status": "ignorado_por_doble_clic"}
             
             clics_procesados[str(chat_id)] = ahora
             
-            # Limpieza automática del diccionario para que no crezca infinito
             if len(clics_procesados) > 200:
                 for k, t in list(clics_procesados.items()):
                     if ahora - t > 5:
                         clics_procesados.pop(k, None)
             # ---------------------------------------------
             
-            responder_callback_telegram(callback_id, "¡Procesando tu solicitud... 🚀")
+            # Clic normal: limpia el botón de forma totalmente silenciosa
+            responder_callback_telegram(callback_id, "")
             
             procesar_mensaje_bot(
                 chat_id=chat_id,
@@ -105,8 +99,6 @@ async def recibir_webhook(request: Request):
             chat_id = message["chat"]["id"]
             nombre = message["from"].get("first_name", "Cliente")
             username = message["from"].get("username", "")
-            
-            # Obtenemos el file_id de la foto con mayor resolución (el último de la lista)
             photo_file_id = message["photo"][-1]["file_id"]
             
             procesar_mensaje_bot(
@@ -152,7 +144,6 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
     }
     if teclado:
         payload["reply_markup"] = teclado
-        
     try:
         requests.post(url, json=payload)
     except Exception as e:
@@ -169,7 +160,6 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
     }
     if teclado:
         payload["reply_markup"] = teclado
-        
     try:
         requests.post(url, json=payload)
     except Exception as e:
@@ -186,7 +176,6 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
     }
     if teclado:
         payload["reply_markup"] = teclado
-        
     try:
         response = requests.post(url, json=payload)
         res_json = response.json()
@@ -195,15 +184,15 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
     except Exception as e:
         print(f"Error editando mensaje en Telegram: {e}")
 
-def responder_callback_telegram(callback_id, texto_alerta="¡Procesando tu solicitud... 🚀"):
-    """Muestra una notificación flotante en Telegram al hacer clic en el botón."""
+def responder_callback_telegram(callback_id, texto_alerta=""):
+    """Responde al callback. Si hay texto, muestra la alerta flotante (para usuarios ansiosos)."""
     url = f"{TELEGRAM_API_URL}/answerCallbackQuery"
+    payload = {"callback_query_id": callback_id}
+    if texto_alerta:
+        payload["text"] = texto_alerta
+        payload["show_alert"] = False
     try:
-        requests.post(url, json={
-            "callback_query_id": callback_id,
-            "text": texto_alerta,
-            "show_alert": False
-        })
+        requests.post(url, json=payload)
     except Exception as e:
         print(f"Error respondiendo callback: {e}")
 
