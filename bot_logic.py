@@ -15,7 +15,7 @@ PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
 TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
+PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -1365,6 +1365,10 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 es_efectivo = (len(partes_ap) > 2 and partes_ap[2].strip() == "efectivo")
                 metodo_pago = "Efectivo" if es_efectivo else "Pago Móvil / Digital"
 
+                # Quitamos los botones del mensaje original de inmediato
+                if message_id:
+                    quitar_botones_telegram(chat_id, message_id)
+
                 exito, tid_cliente, ya_estaba_activa, nombre_cliente, srv_aprobado, perfil_asignado, tipo_operacion, cuenta_fila = aprobar_suscripcion_sheet(row_idx)
 
                 if ya_estaba_activa:
@@ -1423,6 +1427,10 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 fila_obj = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
                 tid_cliente = safe_get(fila_obj, "Telegram_ID", "")
                 srv_rechazado = safe_get(fila_obj, "Servicio", "Streaming")
+
+                # Quitamos los botones del mensaje original de inmediato
+                if message_id:
+                    quitar_botones_telegram(chat_id, message_id)
 
                 resultado_rechazo = rechazar_pago_seguro(row_idx)
 
@@ -2832,7 +2840,7 @@ def get_datos_keyboard(mostrar_renovar=False, suscripciones=None):
             botones.append([{"text": "✏️ Personalizar Nombres de Perfil", "callback_data": "menu_renombrar"}])
 
     if mostrar_renovar: 
-        botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}])
+        botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}],)
         
     botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
     botones.append([{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}])
