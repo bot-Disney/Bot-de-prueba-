@@ -773,15 +773,17 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 
                 sheet_cupones.delete_rows(row_idx_cupon)
                 
-                if message_id:
-                    quitar_botones_telegram(chat_id, message_id)
-
-                enviar_mensaje_callback(chat_id, f"✅ El cupón ha sido eliminado con éxito de la base de datos.", {
+                texto_editado = "🗑️ *Cupón eliminado exitosamente de la base de datos.*"
+                teclado_fin = {
                     "inline_keyboard": [
                         [{"text": "📋 Ver Cupones Restantes", "callback_data": "admin_ver_cupones"}],
-                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]
+                        [{"text": "🔙 Volver a Gestión", "callback_data": "admin_gestionar_cupones"}]
                     ]
-                })
+                }
+                if editar_mensaje_callback and message_id:
+                    editar_mensaje_callback(chat_id, message_id, texto_editado, teclado_fin)
+                else:
+                    enviar_mensaje_callback(chat_id, texto_editado, teclado_fin)
             except Exception as e:
                 enviar_mensaje_callback(chat_id, f"❌ Error al eliminar el cupón: {e}", get_back_keyboard())
         return
@@ -916,15 +918,17 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 
                 sheet_cuentas.delete_rows(row_idx_cuenta)
                 
-                if message_id:
-                    quitar_botones_telegram(chat_id, message_id)
-
-                enviar_mensaje_callback(chat_id, f"✅ La cuenta maestra ha sido eliminada con éxito.", {
+                texto_editado = "🗑️ *Cuenta maestra eliminada exitosamente del inventario.*"
+                teclado_fin = {
                     "inline_keyboard": [
                         [{"text": "📋 Ver Cuentas Restantes", "callback_data": "admin_ver_cuentas"}],
-                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cuentas"}]
+                        [{"text": "🔙 Volver a Gestión", "callback_data": "admin_gestionar_cuentas"}]
                     ]
-                })
+                }
+                if editar_mensaje_callback and message_id:
+                    editar_mensaje_callback(chat_id, message_id, texto_editado, teclado_fin)
+                else:
+                    enviar_mensaje_callback(chat_id, texto_editado, teclado_fin)
             except Exception as e:
                 enviar_mensaje_callback(chat_id, f"❌ Error al eliminar la cuenta: {e}", get_back_keyboard())
         return
@@ -1362,31 +1366,21 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 metodo_pago = "Efectivo" if es_efectivo else "Pago Móvil / Digital"
 
                 exito, tid_cliente, ya_estaba_activa, nombre_cliente, srv_aprobado, perfil_asignado, tipo_operacion, cuenta_fila = aprobar_suscripcion_sheet(row_idx)
-                
-                if message_id:
-                    quitar_botones_telegram(chat_id, message_id)
 
                 if ya_estaba_activa:
-                    enviar_mensaje_callback(chat_id, f"ℹ️ La suscripción de la fila {row_idx} ya había sido aprobada previamente.", get_back_keyboard())
-                    return
-
-                if exito:
+                    texto_res = f"ℹ️ La suscripción de la fila {row_idx} ya había sido aprobada previamente."
+                elif exito:
                     monto_venta = PRECIO_NETFLIX_USD if "netflix" in str(srv_aprobado).lower() else PRECIO_DISNEY_USD
-                    
                     registrar_venta_en_historial(
                         nombre_cliente, tid_cliente, srv_aprobado, perfil_asignado,
                         monto_venta, tipo_operacion, metodo_pago
                     )
-
-                    enviar_mensaje_callback(
-                        chat_id,
-                        f"✅ ¡Fila {row_idx} activada y registrada en *Ventas*!\n"
+                    texto_res = (
+                        f"✅ *¡PAGO APROBADO CON ÉXITO!* (Fila {row_idx})\n\n"
                         f"• *Cliente:* {nombre_cliente}\n"
                         f"• *Servicio:* {srv_aprobado} ({perfil_asignado})\n"
                         f"• *Cuenta:* `{cuenta_fila}`\n"
-                        f"• *Tipo:* {tipo_operacion}\n"
-                        f"• *Método:* {metodo_pago}",
-                        get_back_keyboard()
+                        f"• *Método:* {metodo_pago}"
                     )
                     if tid_cliente:
                         try:
@@ -1408,7 +1402,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         except Exception:
                             pass
                 else:
-                    enviar_mensaje_callback(chat_id, f"❌ Error al actualizar la hoja de cálculo.", get_back_keyboard())
+                    texto_res = f"❌ Error al actualizar la hoja de cálculo para la fila {row_idx}."
+
+                teclado_vol = {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                if editar_mensaje_callback and message_id:
+                    editar_mensaje_callback(chat_id, message_id, texto_res, teclado_vol)
+                else:
+                    enviar_mensaje_callback(chat_id, texto_res, teclado_vol)
             except Exception as e:
                 enviar_mensaje_callback(chat_id, f"❌ Error: {e}", get_back_keyboard())
         return
@@ -1426,10 +1426,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
                 resultado_rechazo = rechazar_pago_seguro(row_idx)
 
-                if message_id:
-                    quitar_botones_telegram(chat_id, message_id)
-
-                enviar_mensaje_callback(chat_id, f"❌ {resultado_rechazo}", get_back_keyboard())
+                texto_res = f"❌ *Pago Rechazado*\n\n{resultado_rechazo}"
+                teclado_vol = {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                
+                if editar_mensaje_callback and message_id:
+                    editar_mensaje_callback(chat_id, message_id, texto_res, teclado_vol)
+                else:
+                    enviar_mensaje_callback(chat_id, texto_res, teclado_vol)
 
                 if tid_cliente:
                     try:
