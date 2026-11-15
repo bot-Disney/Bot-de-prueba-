@@ -1499,7 +1499,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN:* {pin_mostrar} 🔒\n"
+                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -1740,7 +1740,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # SOPORTE, PAGOS Y PREGUNTAS FRECUENTES (FAQ)
+    # SOPORTE, PAGOS Y PREGUNTAS FRECUENTES (FAQ) & TÉRMINOS
     # -------------------------------------------------------------
     elif accion == "soporte" or "pago" in accion:
         if str_chat_id in esperando_captura_pago:
@@ -1752,6 +1752,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         teclado_whatsapp = {
             "inline_keyboard": [
                 [{"text": "❓ Preguntas Frecuentes (FAQ)", "callback_data": "ver_faq"}],
+                [{"text": "📜 Términos y Condiciones", "callback_data": "ver_terminos"}],
                 [{"text": "💬 Soporte Técnico en WhatsApp", "url": url_whatsapp}],
                 [{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}]
             ]
@@ -1765,13 +1766,16 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "ver_faq":
         mensaje_faq = (
             "❓ *PREGUNTAS FRECUENTES (FAQ)* ❓\n\n"
-            "1️⃣ *¿Cómo obtengo el código de acceso (OTP)?*\n"
-            "Presiona el botón *🔑 Solicitar Código* en el menú principal. El bot buscará automáticamente el código más reciente en el correo de la cuenta y te lo enviará.\n\n"
-            "2️⃣ *¿Cómo aplico mi cupón de descuento?*\n"
-            "Cuando elijas renovar o comprar una pantalla, el bot te preguntará si tienes un cupón. Escríbelo y el monto se actualizará de inmediato.\n\n"
-            "3️⃣ *¿Qué pasa si sale 'Pendiente de Stock'?*\n"
-            "Significa que las cuentas actuales están al 100% de su capacidad. Puedes pagar con normalidad para asegurar tu **prioridad #1** y en cuanto carguemos una cuenta nueva el sistema te asignará tu acceso automáticamente.\n\n"
-            "4️⃣ *¿Cuánto dura la suscripción?*\n"
+            "1️⃣ *¿Cuál es la diferencia entre el PIN y el Código de Acceso (OTP)?*\n"
+            "• **El Código (OTP):** Es un código temporal de 4 a 6 dígitos que envía la plataforma al correo para *iniciar sesión* o validar tu dispositivo. Lo pides en el botón *🔑 Solicitar Código*.\n"
+            "• **El PIN de Perfil:** Es una clave fija de 4 números que protege tu pantalla personal para que nadie más entre en ella. Lo ves fijo en *📲 Ver mis datos / pantallas*.\n\n"
+            "2️⃣ *¿Cómo obtengo el código de inicio de sesión (OTP)?*\n"
+            "Primero dale a 'Enviar código' en tu TV o pantalla, espera 10 segundos y luego presiona *🔑 Solicitar Código* en el menú principal del bot.\n\n"
+            "3️⃣ *¿Cómo aplico mi cupón de descuento?*\n"
+            "Cuando elijas renovar o comprar una pantalla, el bot te preguntará automáticamente si tienes un cupón antes de mostrarte los datos de pago.\n\n"
+            "4️⃣ *¿Qué pasa si sale 'Pendiente de Stock'?*\n"
+            "Significa que las cuentas inmediatas están al 100%, pero puedes pagar para asegurar tu **prioridad #1** y en cuanto carguemos stock nuevo recibirás tu acceso automático.\n\n"
+            "5️⃣ *¿Cuánto dura la suscripción?*\n"
             "Cada pago aprobado activa tu pantalla por exactamente **30 días**."
         )
         teclado_faq = {
@@ -1783,6 +1787,28 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             editar_mensaje_callback(chat_id, message_id, mensaje_faq, teclado_faq)
         else:
             enviar_mensaje_callback(chat_id, mensaje_faq, teclado_faq)
+        return
+
+    elif accion == "ver_terminos":
+        mensaje_terminos = (
+            "📜 *TÉRMINOS Y CONDICIONES DEL SERVICIO* 📜\n\n"
+            "Al adquirir o renovar una pantalla con nosotros, aceptas las siguientes normas para garantizar la estabilidad de todos los usuarios:\n\n"
+            "1️⃣ *1 Pantalla = 1 Dispositivo a la vez:* Tu suscripción te da derecho a reproducir contenido en **un (1) solo dispositivo en simultáneo**. Si intentas reproducir en dos pantallas al mismo tiempo, el sistema bloqueará la sesión.\n\n"
+            "2️⃣ *Respeto a los Perfiles y PINs:* Ingresa **únicamente** a tu perfil asignado usando tu PIN de seguridad. Entrar, borrar o modificar perfiles ajenos es motivo de suspensión inmediata sin reembolso.\n\n"
+            "3️⃣ *Prohibido alterar la Cuenta Maestra:* Está estrictamente prohibido cambiar el correo, la contraseña general, el plan de facturación o cerrar la sesión de otros dispositivos.\n\n"
+            "4️⃣ *Uso Personal:* Los datos de acceso y códigos OTP son de uso exclusivo del titular registrado en el bot.\n\n"
+            "5️⃣ *Renovaciones y Vencimientos:* Tienes hasta el día de tu fecha de vencimiento para reportar tu pago. Pasada esa fecha, el sistema liberará tu cupo automáticamente para otro cliente.\n\n"
+            "6️⃣ *Garantía Total:* Cuentas con soporte y garantía activa durante los **30 días** de tu suscripción ante cualquier novedad técnica."
+        )
+        teclado_term = {
+            "inline_keyboard": [
+                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
+            ]
+        }
+        if es_callback and editar_mensaje_callback:
+            editar_mensaje_callback(chat_id, message_id, mensaje_terminos, teclado_term)
+        else:
+            enviar_mensaje_callback(chat_id, mensaje_terminos, teclado_term)
         return
 
     else:
@@ -2246,7 +2272,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
