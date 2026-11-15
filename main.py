@@ -11,6 +11,9 @@ app = FastAPI()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "TU_TOKEN_DE_TELEGRAM")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
+# Diccionario temporal para prevenir doble clic / spam de botones
+clics_procesados = {}
+
 # =============================================================
 # HILO EN SEGUNDO PLANO PARA LAS ALERTAS DIARIAS
 # =============================================================
@@ -63,6 +66,24 @@ async def recibir_webhook(request: Request):
             
             nombre = cb["from"].get("first_name", "Cliente")
             username = cb["from"].get("username", "")
+            
+            # --- FILTRO ANTISPAM / DOBLE CLIC ---
+            ahora = time.time()
+            # Creamos una llave única por usuario y botón presionado
+            clave_clic = f"{chat_id}_{callback_data}"
+            if clave_clic in clics_procesados:
+                # Si hizo clic en el mismo botón hace menos de 0.8 segundos, ignoramos el duplicado
+                if ahora - clics_procesados[clave_clic] < 0.8:
+                    responder_callback_telegram(callback_id)
+                    return {"status": "ignorado_por_doble_clic"}
+            
+            clics_procesados[clave_clic] = ahora
+            # Limpiamos registros viejos del diccionario para que no crezca infinito
+            if len(clics_procesados) > 200:
+                for k, t in list(clics_procesados.items()):
+                    if ahora - t > 5:
+                        clics_procesados.pop(k, None)
+            # ------------------------------------
             
             responder_callback_telegram(callback_id)
             
