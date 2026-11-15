@@ -72,8 +72,8 @@ async def recibir_webhook(request: Request):
             # Bloqueamos al usuario por su chat_id completo para que no pueda presionar NINGÚN botón en ráfaga
             if str(chat_id) in clics_procesados:
                 tiempo_transcurrido = ahora - clics_procesados[str(chat_id)]
-                if tiempo_transcurrido < 2.0:  # Tolera 1.5 segundos entre cualquier clic
-                    responder_callback_telegram(callback_id)
+                if tiempo_transcurrido < 2.0:  # Tolera 2.0 segundos entre cualquier clic
+                    responder_callback_telegram(callback_id, "⏳ ¡Acción en proceso, espera un momento!")
                     return {"status": "ignorado_por_doble_clic"}
             
             clics_procesados[str(chat_id)] = ahora
@@ -85,7 +85,7 @@ async def recibir_webhook(request: Request):
                         clics_procesados.pop(k, None)
             # ---------------------------------------------
             
-            responder_callback_telegram(callback_id)
+            responder_callback_telegram(callback_id, "¡Procesando tu solicitud... 🚀")
             
             procesar_mensaje_bot(
                 chat_id=chat_id,
@@ -195,11 +195,15 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
     except Exception as e:
         print(f"Error editando mensaje en Telegram: {e}")
 
-def responder_callback_telegram(callback_id):
-    """Quita el icono de carga del botón en Telegram al presionarlo."""
+def responder_callback_telegram(callback_id, texto_alerta="¡Procesando tu solicitud... 🚀"):
+    """Muestra una notificación flotante en Telegram al hacer clic en el botón."""
     url = f"{TELEGRAM_API_URL}/answerCallbackQuery"
     try:
-        requests.post(url, json={"callback_query_id": callback_id})
+        requests.post(url, json={
+            "callback_query_id": callback_id,
+            "text": texto_alerta,
+            "show_alert": False
+        })
     except Exception as e:
         print(f"Error respondiendo callback: {e}")
 
