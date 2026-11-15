@@ -15,7 +15,7 @@ PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
 TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "Provincial (0108)"
+PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -120,7 +120,7 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión y control completo de cupones desde /admin."""
+    """Cerebro industrial con gestión y control completo de cupones y cuentas desde /admin."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -342,7 +342,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         {
                             "inline_keyboard": [
                                 [{"text": "📦 Asignar Stock Pendiente Ahora", "callback_data": "admin_asignar_stock"}],
-                                [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                                [{"text": "🔙 Volver a Gestión de Cuentas", "callback_data": "admin_gestionar_cuentas"}]
                             ]
                         }
                     )
@@ -640,7 +640,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUPONES
+    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUENTAS / CUPONES
     # -------------------------------------------------------------
     if accion == "/admin" or accion == "admin_volver":
         if str_chat_id in esperando_captura_pago:
@@ -665,7 +665,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 "inline_keyboard": [
                     [{"text": "📊 Resumen General del Negocio", "callback_data": "admin_resumen_negocio"}],
                     [{"text": "📋 Ver Pagos Pendientes", "callback_data": "admin_ver_pendientes"}],
-                    [{"text": "➕ Cargar Cuenta y PINs (Stock)", "callback_data": "admin_cargar_cuenta"}],
+                    [{"text": "🔑 Crear y Gestionar Cuentas (Stock)", "callback_data": "admin_gestionar_cuentas"}],
                     [{"text": "🎟️ Crear y Gestionar Cupones", "callback_data": "admin_gestionar_cupones"}],
                     [{"text": "🔍 Buscar y Gestionar Cliente Activo", "callback_data": "admin_pedir_busqueda"}],
                     [{"text": "🗑️ Gestionar / Eliminar Vencidos", "callback_data": "admin_ver_vencidos"}],
@@ -771,7 +771,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cupones = spreadsheet.worksheet("Cupones")
                 
-                # Borramos la fila del cupón en Google Sheets
                 sheet_cupones.delete_rows(row_idx_cupon)
                 
                 if message_id:
@@ -826,6 +825,154 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, texto_p1, teclado_canc)
         return
 
+    # -------------------------------------------------------------
+    # GESTIÓN Y CREACIÓN DE CUENTAS MAESTRAS (STOCK)
+    # -------------------------------------------------------------
+    elif accion == "admin_gestionar_cuentas":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            if str_chat_id in asistente_cuenta_datos:
+                asistente_cuenta_datos.pop(str_chat_id)
+                
+            texto_gcta = (
+                "🔑 *GESTIÓN DE CUENTAS MAESTRAS (STOCK)*\n\n"
+                "Aquí puedes cargar nuevas cuentas con sus PINs o ver y administrar las existentes en tu inventario:"
+            )
+            teclado_gcta = {
+                "inline_keyboard": [
+                    [{"text": "➕ Cargar Cuenta y PINs (Stock)", "callback_data": "admin_cargar_cuenta"}],
+                    [{"text": "📋 Ver / Listar Cuentas Existentes", "callback_data": "admin_ver_cuentas"}],
+                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, texto_gcta, teclado_gcta)
+            else:
+                enviar_mensaje_callback(chat_id, texto_gcta, teclado_gcta)
+        return
+
+    elif accion == "admin_ver_cuentas":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                try:
+                    sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                    registros_c = sheet_cuentas.get_all_records()
+                except Exception:
+                    registros_c = []
+
+                if not registros_c:
+                    teclado_vacio_c = {"inline_keyboard": [
+                        [{"text": "➕ Cargar Cuenta", "callback_data": "admin_cargar_cuenta"}],
+                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cuentas"}]
+                    ]}
+                    if es_callback and editar_mensaje_callback:
+                        editar_mensaje_callback(chat_id, message_id, "🔑 No hay cuentas maestras registradas en Google Sheets.", teclado_vacio_c)
+                    else:
+                        enviar_mensaje_callback(chat_id, "🔑 No hay cuentas maestras registradas en Google Sheets.", teclado_vacio_c)
+                    return
+
+                enviar_mensaje_callback(chat_id, f"📋 *LISTA DE CUENTAS MAESTRAS* ({len(registros_c)} en total):")
+
+                for idx, row in enumerate(registros_c, start=2):
+                    srv = safe_get(row, "Servicio", "Disney+")
+                    correo = safe_get(row, "Correo (Usuario)", safe_get(row, "Correo", "S/C"))
+                    cap = safe_get(row, "Capacidad Total", "5")
+                    ocu = safe_get(row, "Perfiles Ocupados", "0")
+                    est = safe_get(row, "Estado", "Activa")
+                    pins = safe_get(row, "PINs de Perfiles", "S/PIN")
+
+                    txt_cta = (
+                        f"📺 *Servicio:* {srv}\n"
+                        f"• *Correo:* `{correo}`\n"
+                        f"• *Ocupados:* `{ocu} / {cap}` perfiles\n"
+                        f"• *Estado:* *{est}*\n"
+                        f"• *PINs:* `{pins}`"
+                    )
+                    teclado_cta_op = {
+                        "inline_keyboard": [
+                            [{"text": "🗑️ Eliminar Cuenta Maestra", "callback_data": f"admin_delcuenta_{idx}"}]
+                        ]
+                    }
+                    enviar_mensaje_callback(chat_id, txt_cta, teclado_cta_op)
+
+                enviar_mensaje_callback(chat_id, "Gestión de cuentas finalizada.", {
+                    "inline_keyboard": [
+                        [{"text": "➕ Cargar Otra Cuenta", "callback_data": "admin_cargar_cuenta"}],
+                        [{"text": "🔙 Volver a Gestión de Cuentas", "callback_data": "admin_gestionar_cuentas"}]
+                    ]
+                })
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error al listar cuentas: {e}", get_back_keyboard())
+        return
+
+    elif accion.startswith("admin_delcuenta_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                row_idx_cuenta = int(accion.split("_")[-1])
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                
+                sheet_cuentas.delete_rows(row_idx_cuenta)
+                
+                if message_id:
+                    quitar_botones_telegram(chat_id, message_id)
+
+                enviar_mensaje_callback(chat_id, f"✅ La cuenta maestra ha sido eliminada con éxito.", {
+                    "inline_keyboard": [
+                        [{"text": "📋 Ver Cuentas Restantes", "callback_data": "admin_ver_cuentas"}],
+                        [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cuentas"}]
+                    ]
+                })
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error al eliminar la cuenta: {e}", get_back_keyboard())
+        return
+
+    elif accion == "admin_cargar_cuenta":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            mensaje_carga = "➕ *CARGAR NUEVA CUENTA Y PINS*\n\nSelecciona a qué plataforma pertenece la cuenta que deseas agregar:"
+            teclado_servicios = {
+                "inline_keyboard": [
+                    [{"text": "📺 Netflix (5 Perfiles)", "callback_data": "admin_cuenta_netflix"}],
+                    [{"text": "📺 Disney+ (7 Perfiles)", "callback_data": "admin_cuenta_disney"}],
+                    [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cuentas"}]
+                ]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, mensaje_carga, teclado_servicios)
+            else:
+                enviar_mensaje_callback(chat_id, mensaje_carga, teclado_servicios)
+        return
+
+    elif accion == "admin_cuenta_netflix" or accion == "admin_cuenta_disney":
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            es_netflix = "netflix" in accion
+            servicio_elegido = "Netflix" if es_netflix else "Disney+"
+            limite_perfiles = 5 if es_netflix else 7
+
+            asistente_cuenta_datos[str_chat_id] = {
+                "servicio": servicio_elegido,
+                "limite": limite_perfiles,
+                "paso": "esperando_correo"
+            }
+
+            mensaje_peticion = (
+                f"➕ *NUEVA CUENTA DE {servicio_elegido.upper()}*\n\n"
+                "Paso 1/2: Escribe o pega el **correo y contraseña** de la cuenta\n(Ej: `correo@gmail.com : tucontraseña`):"
+            )
+            teclado_canc = {
+                "inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": "admin_gestionar_cuentas"}]]
+            }
+            if es_callback and editar_mensaje_callback:
+                editar_mensaje_callback(chat_id, message_id, mensaje_peticion, teclado_canc)
+            else:
+                enviar_mensaje_callback(chat_id, mensaje_peticion, teclado_canc)
+        return
+
+    # -------------------------------------------------------------
+    # EDICIÓN DE CLIENTES / EDICIÓN MANUAL
+    # -------------------------------------------------------------
     elif accion.startswith("admin_edit_menu_"):
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
@@ -1075,47 +1222,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 editar_mensaje_callback(chat_id, message_id, resumen_detallado, teclado_resumen)
             else:
                 enviar_mensaje_callback(chat_id, resumen_detallado, teclado_resumen)
-        return
-
-    elif accion == "admin_cargar_cuenta":
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            mensaje_carga = "➕ *CARGAR NUEVA CUENTA Y PINS*\n\nSelecciona a qué plataforma pertenece la cuenta que deseas agregar:"
-            teclado_servicios = {
-                "inline_keyboard": [
-                    [{"text": "📺 Netflix (5 Perfiles)", "callback_data": "admin_cuenta_netflix"}],
-                    [{"text": "📺 Disney+ (7 Perfiles)", "callback_data": "admin_cuenta_disney"}],
-                    [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
-                ]
-            }
-            if es_callback and editar_mensaje_callback:
-                editar_mensaje_callback(chat_id, message_id, mensaje_carga, teclado_servicios)
-            else:
-                enviar_mensaje_callback(chat_id, mensaje_carga, teclado_servicios)
-        return
-
-    elif accion == "admin_cuenta_netflix" or accion == "admin_cuenta_disney":
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            es_netflix = "netflix" in accion
-            servicio_elegido = "Netflix" if es_netflix else "Disney+"
-            limite_perfiles = 5 if es_netflix else 7
-
-            asistente_cuenta_datos[str_chat_id] = {
-                "servicio": servicio_elegido,
-                "limite": limite_perfiles,
-                "paso": "esperando_correo"
-            }
-
-            mensaje_peticion = (
-                f"➕ *NUEVA CUENTA DE {servicio_elegido.upper()}*\n\n"
-                "Paso 1/2: Escribe o pega el **correo y contraseña** de la cuenta\n(Ej: `correo@gmail.com : tucontraseña`):"
-            )
-            teclado_canc = {
-                "inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": "admin_volver"}]]
-            }
-            if es_callback and editar_mensaje_callback:
-                editar_mensaje_callback(chat_id, message_id, mensaje_peticion, teclado_canc)
-            else:
-                enviar_mensaje_callback(chat_id, mensaje_peticion, teclado_canc)
         return
 
     elif accion == "admin_pedir_busqueda":
