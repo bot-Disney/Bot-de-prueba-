@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "Provincial (0108)"
+PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -136,7 +136,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     chat_id, 
                     message_id, 
                     "✅ *¡Normas aceptadas con éxito!*\n\nYa puedes disfrutar de tu servicio con total tranquilidad. Usa el menú principal cuando lo necesites.", 
-                    get_main_menu_keyboard() # <--- Aquí le devolvemos los botones del menú principal
+                    get_main_menu_keyboard()
                 )
             else:
                 enviar_mensaje_callback(chat_id, "✅ ¡Gracias por confirmar! Disfruta tu contenido.", get_main_menu_keyboard())
@@ -1780,7 +1780,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN:* {pin_mostrar} 🔒\n"
+                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -2630,6 +2630,72 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
     enviar_cb(chat_id, "✅ Reporte enviado con éxito al administrador. En breve verificaremos tu referencia.", get_main_menu_keyboard())
 
 
+# =============================================================
+# FUNCIÓN NUEVA: NOTIFICAR AL ADMIN CUANDO UNA PANTALLA YA VENCIÓ
+# =============================================================
+def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
+    """Revisa las pantallas que ya vencieron (ayer o antes) y cuyo cliente aún no ha reportado pago."""
+    if not ADMIN_ID:
+        return "No hay ADMIN_ID configurado."
+
+    try:
+        sheet = conectar_sheets()
+        registros = sheet.get_all_records()
+        hoy = datetime.date.today()
+        avisos_enviados = 0
+
+        for idx, row in enumerate(registros, start=2):
+            estado = safe_get(row, "Estado", "").lower()
+            vencimiento_str = safe_get(row, "Vencimiento", "")
+            correo = safe_get(row, "Cuenta", "")
+            nombre_cliente = safe_get(row, "Nombre", "Cliente")
+            servicio = safe_get(row, "Servicio", "Disney+")
+            pantalla = safe_get(row, "Pantalla", "Perfil 1")
+            tid = safe_get(row, "Telegram_ID", "")
+
+            # Solo revisamos cuentas que tengan correo asignado
+            if correo and correo.lower() not in ("por asignar", "pendiente de stock"):
+                # Si el cliente ya está pagando o pendiente, lo ignoramos para no molestar
+                if "pendiente" in estado:
+                    continue
+
+                fecha_venc = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                    try:
+                        fecha_venc = datetime.datetime.strptime(vencimiento_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+
+                if fecha_venc:
+                    dias_restantes = (fecha_venc - hoy).days
+
+                    # Se dispara SOLO si ya venció (dias_restantes < 0)
+                    if dias_restantes < 0:
+                        dias_vencido = abs(dias_restantes)
+                        
+                        alerta_vencimiento_admin = (
+                            "🔴 *ALERTA: PERFIL VENCIDO SIN RENOVACIÓN* 🔴\n\n"
+                            f"• *Vencimiento:* Hace {dias_vencido} día(s)\n"
+                            f"• *Cliente:* {nombre_cliente} (`{tid}`)\n"
+                            f"• *Servicio:* {servicio} ({pantalla})\n"
+                            f"• *Correo Maestro:* `{correo}`\n\n"
+                            "🛠️ *Acción:* Como el cliente aún no ha pagado, entra a la plataforma y **cierra la sesión / cambia el PIN** de este perfil."
+                        )
+
+                        try:
+                            enviar_msg_cb(int(ADMIN_ID), alerta_vencimiento_admin)
+                            avisos_enviados += 1
+                            time.sleep(0.2)
+                        except Exception as e:
+                            print(f"No se pudo enviar alerta de vencimiento al admin: {e}")
+
+        return f"Revisión completada. Alertas enviadas: {avisos_enviados}."
+    except Exception as e:
+        print(f"Error verificando vencimientos: {e}")
+        return f"Error: {e}"
+
+
 # ==========================================
 # FUNCIONES AUXILIARES DE GOOGLE SHEETS
 # ==========================================
@@ -3053,7 +3119,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
