@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
+PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -1780,7 +1780,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
+                    f"• *PIN:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -3119,7 +3119,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
@@ -3224,7 +3224,7 @@ def get_main_menu_keyboard():
         "inline_keyboard": [
             [{"text": "📲 Ver mis datos / pantallas", "callback_data": "ver_datos"}],
             [{"text": "🔑 Solicitar Código", "callback_data": "obtener_codigo"}],
-            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "➕ Otra Pantalla", "callback_data": "comprar_extra"}],
+            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "➕ Comprar Pantalla", "callback_data": "comprar_extra"}],
             [{"text": "💬 Soporte / Pagos", "callback_data": "soporte"}]
         ]
     }
