@@ -5,8 +5,25 @@ import requests
 from sheets_db import conectar_sheets
 from gmail_otp import obtener_ultimo_codigo_disney, obtener_ultimo_codigo_netflix
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
 WHATSAPP_NUMERO = "584247091547"
 ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
+
+# =============================================================
+# CONFIGURACIÓN DE HORA LOCAL (VENEZUELA / UTC-4)
+# =============================================================
+def obtener_hora_venezuela():
+    """Retorna la fecha y hora actual ajustada estrictamente a la zona horaria de Venezuela (UTC-4)."""
+    if ZoneInfo:
+        try:
+            return datetime.datetime.now(ZoneInfo("America/Caracas"))
+        except Exception:
+            pass
+    return datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=4)
 
 # =============================================================
 # CONFIGURACIÓN DE PRECIOS (USD/USDT) Y DATOS DE PAGO MÓVIL
@@ -90,7 +107,7 @@ def existen_cupones_activos():
         sheet_cupones = spreadsheet.worksheet("Cupones")
         registros = sheet_cupones.get_all_records()
         
-        ahora = datetime.datetime.now()
+        ahora = obtener_hora_venezuela().replace(tzinfo=None)
         for row in registros:
             estado = safe_get(row, "Estado", "Activo").lower()
             if estado == "activo":
@@ -2173,7 +2190,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_unico = safe_get(sub_unica, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_unico else "disney"
             
-            # IR DIRECTAMENTE AL PAGO SIN MENÚ INTERMEDIO DE CUPÓN
             iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         else:
             botones_selector = []
@@ -2201,7 +2217,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_fila = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_fila else "disney"
             
-            # IR DIRECTAMENTE AL PAGO
             iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         except Exception as e:
             print(f"Error procesando renovación de fila específica: {e}")
@@ -2241,7 +2256,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
         
-        # IR DIRECTAMENTE AL PAGO CON BOTÓN DE CUPÓN INCORPORADO
         iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
 
     elif accion.startswith("usar_cupon_"):
@@ -2377,7 +2391,7 @@ def validar_y_consumir_cupon(codigo_ingresado):
             return False, "❌ El cupón ingresado no existe."
 
         registros = sheet_cupones.get_all_records()
-        ahora = datetime.datetime.now()
+        ahora = obtener_hora_venezuela().replace(tzinfo=None)
 
         for idx, row in enumerate(registros, start=2):
             codigo_db = safe_get(row, "Codigo", "").upper()
@@ -2453,7 +2467,7 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
 
     try:
         sheet = conectar_sheets()
-        hora_actual_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        hora_actual_iso = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
         sheet.update_cell(row_idx_target, 5, hora_actual_iso) 
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
         
@@ -2500,7 +2514,6 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
         f"📸 *PASO FINAL:* Realiza el pago y **envía tu captura o referencia por este mismo chat**."
     )
     
-    # BOTÓN DE CUPÓN DISCRETO INTEGRADO EN EL MISMO MENÚ DE PAGO
     teclado_pago_botones = []
     if not cupon_aplicado and existen_cupones_activos():
         teclado_pago_botones.append([{"text": "🎟️ ¿Tienes un cupón? Canjéalo aquí", "callback_data": f"usar_cupon_{row_idx_target}"}])
@@ -2537,7 +2550,7 @@ def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
         codigo = sesion_c["codigo"]
         tipo = sesion_c["tipo"]
         valor = sesion_c["valor"]
-        fecha_creacion = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_creacion = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
         duracion_horas = sesion_c["duracion_horas"]
         usos_maximos = sesion_c["usos_maximos"]
         veces_usado = 0
@@ -2636,7 +2649,7 @@ def registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_c
             f"• *Usuario:* {nombre_completo}\n"
             f"• *Telegram ID:* `{str_chat_id}`\n"
             f"• *Incidente:* Ha intentado solicitar códigos de acceso múltiples veces sin tener una suscripción activa o con cuenta vencida.\n\n"
-            "💡 Es posible que este usuario esté intentando acceder sin pagar o buscando filtrar accesos. Puedes buscar su ID en `/admin` para verificarlo."
+            "💡 Es posible que este usuario esté intentando acceder sin pagar o buscando filtrar accesos. Puedes buscar his ID en `/admin` para verificarlo."
         )
         try:
             enviar_mensaje_cb(int(ADMIN_ID), alerta_anomalia)
@@ -2810,7 +2823,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
@@ -2871,7 +2884,7 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        hoy = datetime.date.today()
+        hoy = obtener_hora_venezuela().date()
         avisos_enviados = 0
 
         for idx, row in enumerate(registros, start=2):
@@ -3212,7 +3225,7 @@ def obtener_suscripciones_vencidas():
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
         vencidos = []
-        hoy = datetime.date.today()
+        hoy = obtener_hora_venezuela().date()
 
         for idx, row in enumerate(registros, start=2):
             vencimiento_str = safe_get(row, "Vencimiento", "")
@@ -3304,7 +3317,8 @@ def aprobar_suscripcion_sheet(row_idx):
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
                 try:
                     hora_orden = datetime.datetime.strptime(timestamp_orden, fmt)
-                    diferencia_minutos = (datetime.datetime.now() - hora_orden).total_seconds() / 60
+                    ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
+                    diferencia_minutos = (ahora_local - hora_orden).total_seconds() / 60
                     if diferencia_minutos > 30:
                         tiempo_expirado = True
                     break
@@ -3330,7 +3344,7 @@ def aprobar_suscripcion_sheet(row_idx):
                     except Exception:
                         pass
 
-        fecha_base = datetime.date.today()
+        fecha_base = obtener_hora_venezuela().date()
         nueva_fecha = (fecha_base + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
         
         sheet.update_cell(row_idx, 5, nueva_fecha)
@@ -3356,7 +3370,7 @@ def registrar_venta_en_historial(nombre_cliente, tid_cliente, servicio, perfil, 
             sheet_ventas = spreadsheet.add_worksheet(title="Ventas", rows="1000", cols="8")
             sheet_ventas.append_row(encabezados_esperados)
 
-        fecha_hora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        fecha_hora = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
         sheet_ventas.append_row([
             fecha_hora,
             str(nombre_cliente),
@@ -3374,10 +3388,11 @@ def registrar_venta_en_historial(nombre_cliente, tid_cliente, servicio, perfil, 
 def verificar_alerta_vencimiento(vencimiento_str, estado_str):
     if estado_str.lower() != "activo":
         return "🔴"
+    hoy = obtener_hora_venezuela().date()
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             fecha_venc = datetime.datetime.strptime(vencimiento_str, fmt).date()
-            dias = (fecha_venc - datetime.date.today()).days
+            dias = (fecha_venc - hoy).days
             if dias < 0: return "⚠️ *(Vencida)*"
             elif dias == 0: return "🟠 *(Vence HOY)*"
             elif dias <= 3: return f"🟡 *(Vence en {dias} días)*"
