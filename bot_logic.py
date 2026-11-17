@@ -2204,7 +2204,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         mensaje = (
-            "🛒 *SELECCIONA EL SERVICIO A COMPRAR*\n\n"
+            "🛒 *COMPRAR NUEVA PANTALLA*\n\n"
             "¿Qué plataforma deseas comprar como nueva pantalla?\n\n"
             f"• *Disney+:* `${PRECIO_DISNEY_USD:.2f} USDT`\n"
             f"• *Netflix:* `${PRECIO_NETFLIX_USD:.2f} USDT`"
