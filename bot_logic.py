@@ -33,6 +33,7 @@ asistente_cupon_admin = {}
 esperando_codigo_cupon_cliente = {} 
 detalles_pago_activos = {} 
 asistente_difusion_admin = {} # Memoria para plantillas y mensajes CRM (global e individual)
+registros_pendientes_info = {} # Guarda temporalmente el nombre real y username al usar "registrar"
 
 
 def safe_get(row_dict, key, default=""):
@@ -161,6 +162,10 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             )
             return
 
+        # Guardamos el nombre real y username del usuario en memoria para usarlo al aprobar su registro
+        nombre_completo_reg = f"{nombre} (@{username})" if username else nombre
+        registros_pendientes_info[str_chat_id] = nombre_completo_reg
+
         mensaje_cliente_reg = (
             "📝 *¡SOLICITUD DE REGISTRO RECIBIDA!*\n\n"
             "Hemos tomado tus datos para asociar tu cuenta externa al sistema.\n\n"
@@ -178,7 +183,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         if ADMIN_ID:
             texto_admin_reg = (
                 "🚨 *¡NUEVA SOLICITUD DE REGISTRO MANUAL!* 🚨\n\n"
-                f"• *Cliente:* {nombre} (@{username})\n"
+                f"• *Cliente:* {nombre_completo_reg}\n"
                 f"• *Telegram ID:* `{str_chat_id}`\n\n"
                 "🛠️ *Acción requerida:* Selecciona a continuación la cuenta que deseas asignarle de tu inventario:"
             )
@@ -592,7 +597,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         elif paso_actual == "esperando_fecha_registro_manual":
             fecha_vencimiento = texto.strip()
-            tid_target = sesion.get("tid_target")
+            tid_target = str(sesion.get("tid_target")).strip()
             correo_sel = sesion.get("correo")
             srv_sel = sesion.get("servicio")
             perfil_sel = sesion.get("perfil")
@@ -604,10 +609,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
                 registros_cuentas = sheet_cuentas.get_all_records()
 
-                nombre_cliente_encontrado = f"Usuario ID {tid_target}"
+                # Recuperamos el nombre real capturado cuando el usuario escribió "registrar"
+                nombre_cliente_encontrado = registros_pendientes_info.pop(tid_target, None)
+                if not nombre_cliente_encontrado:
+                    nombre_cliente_encontrado = f"Usuario ID {tid_target}"
 
                 sheet_principal.append_row([
-                    str(tid_target),
+                    tid_target,
                     nombre_cliente_encontrado,
                     correo_sel,
                     perfil_sel,
@@ -635,6 +643,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(
                     chat_id,
                     f"✅ *¡CLIENTE REGISTRADO MANUALMENTE CON ÉXITO!*\n\n"
+                    f"• *Cliente:* {nombre_cliente_encontrado}\n"
                     f"• *Telegram ID:* `{tid_target}`\n"
                     f"• *Servicio:* {srv_sel} ({perfil_sel})\n"
                     f"• *Correo:* `{correo_sel}`\n"
@@ -1379,7 +1388,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
                 partes = accion.split("_")
-                tid_target = partes[3]
+                tid_target = str(partes[3]).strip()
                 idx_cuenta_sheet = int(partes[4])
 
                 sheet_principal = conectar_sheets()
@@ -1389,6 +1398,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
                 correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
                 srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
+
+                nombre_cliente_preview = registros_pendientes_info.get(tid_target, f"Usuario ID {tid_target}")
 
                 limite_max = 5 if "netflix" in srv_sel.lower() else 7
                 registros_clientes = sheet_principal.get_all_records()
@@ -1415,6 +1426,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
                 texto_sel_p = (
                     f"👤 *SELECCIONAR PERFIL PARA REGISTRO*\n\n"
+                    f"• *Cliente:* {nombre_cliente_preview}\n"
                     f"• *Telegram ID Target:* `{tid_target}`\n"
                     f"• *Correo:* `{correo_sel}`\n\n"
                     "Selecciona el perfil que le vas a entregar:"
@@ -1431,7 +1443,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
                 partes = accion.split("_")
-                tid_target = partes[3]
+                tid_target = str(partes[3]).strip()
                 idx_cuenta_sheet = int(partes[4])
                 num_perfil = int(partes[5])
 
@@ -1442,6 +1454,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 
                 correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
                 srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
+                nombre_cliente_preview = registros_pendientes_info.get(tid_target, f"Usuario ID {tid_target}")
 
                 asistente_edicion_admin[str_chat_id] = {
                     "paso": "esperando_fecha_registro_manual",
@@ -1453,6 +1466,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
                 texto_pedir_fecha = (
                     "📅 *FECHA DE VENCIMIENTO*\n\n"
+                    f"• *Cliente:* {nombre_cliente_preview}\n"
                     f"• *Cliente ID:* `{tid_target}`\n"
                     f"• *Cuenta:* `{correo_sel}`\n"
                     f"• *Perfil:* `Perfil {num_perfil}`\n\n"
@@ -3331,7 +3345,6 @@ def aprobar_suscripcion_sheet(row_idx):
                 sheet.update_cell(row_idx, 3, cuenta_fila)
                 sheet.update_cell(row_idx, 4, perfil_asignado)
             else:
-                # Si no hay stock y se agotó el tiempo, enviamos alerta directa al admin
                 if ADMIN_ID:
                     try:
                         alerta_tardia_sin_stock = (
@@ -3340,7 +3353,6 @@ def aprobar_suscripcion_sheet(row_idx):
                             f"• *Servicio:* {servicio_fila}\n\n"
                             "💡 El cliente pagó después de los 30 minutos y ya no hay perfiles libres en stock. Por favor, carga una cuenta nueva y asígnale su acceso manualmente."
                         )
-                        # Nota: puedes usar el objeto de envío desde aquí o dejar que el flujo registre la orden para stock pendiente
                     except Exception:
                         pass
 
