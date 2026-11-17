@@ -1990,7 +1990,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         if not suscripciones:
-            mensaje = "⚠️ Aún no tienes ninguna pantalla registrada con este ID de Telegram.\n\nSelecciona *➕ Otra Pantalla* o *🔄 Renovar* en el menú para comenzar."
+            mensaje = "⚠️ Aún no tienes ninguna pantalla registrada con este ID de Telegram.\n\nSelecciona *🛒 Comprar Pantalla* o *🔄 Renovar* en el menú para comenzar."
             teclado = get_back_keyboard()
         else:
             total = len(suscripciones)
