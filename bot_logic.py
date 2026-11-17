@@ -32,8 +32,8 @@ asistente_edicion_admin = {}
 asistente_cupon_admin = {}
 esperando_codigo_cupon_cliente = {} 
 detalles_pago_activos = {} 
-asistente_difusion_admin = {} # Memoria para plantillas y mensajes CRM (global e individual)
-registros_pendientes_info = {} # Guarda temporalmente el nombre real y username al usar "registrar"
+asistente_difusion_admin = {} 
+registros_pendientes_info = {} 
 
 
 def safe_get(row_dict, key, default=""):
@@ -122,7 +122,7 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión y control completo de cupones, cuentas y CRM de mensajería desde /admin."""
+    """Cerebro industrial con gestión simplificada de pagos y cupones directos desde el menú de cobro."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -162,7 +162,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             )
             return
 
-        # Guardamos el nombre real y username del usuario en memoria para usarlo al aprobar su registro
         nombre_completo_reg = f"{nombre} (@{username})" if username else nombre
         registros_pendientes_info[str_chat_id] = nombre_completo_reg
 
@@ -341,13 +340,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # CLIENTE: VALIDACIÓN DE CÓDIGO DE CUPÓN ESCRITO
+    # CLIENTE: VALIDACIÓN DE CÓDIGO DE CUPÓN ESCRITO (DIRECTO DESDE PAGO)
     # -------------------------------------------------------------
     if not es_callback and str_chat_id in esperando_codigo_cupon_cliente and texto:
         datos_pago_temp = esperando_codigo_cupon_cliente.pop(str_chat_id)
         codigo_ingresado = texto.strip()
 
-        if codigo_ingresado.lower() in ("no", "saltar", "sin cupón", "continuar"):
+        if codigo_ingresado.lower() in ("no", "cancelar", "salir", "volver"):
             iniciar_proceso_pago_con_descuento(
                 chat_id, str_chat_id, nombre, username, 
                 datos_pago_temp["servicio_clave"], datos_pago_temp["tipo_operacion"], 
@@ -362,11 +361,10 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             esperando_codigo_cupon_cliente[str_chat_id] = datos_pago_temp
             enviar_mensaje_callback(
                 chat_id,
-                f"{resultado}\n\nPor favor, escribe otro código de cupón válido o presiona el botón para continuar sin descuento:",
+                f"{resultado}\n\nPor favor, escribe otro código de cupón válido o escribe `cancelar` para volver a los datos de pago normales:",
                 {
                     "inline_keyboard": [
-                        [{"text": "➡️ Continuar sin Descuento", "callback_data": f"continuar_sin_cupon_{datos_pago_temp['row_idx_target']}"}],
-                        [{"text": "🔙 Cancelar y Volver", "callback_data": "menu_principal"}]
+                        [{"text": "🔙 Volver al Pago", "callback_data": f"volver_pago_sin_cupon_{datos_pago_temp['row_idx_target']}"}]
                     ]
                 }
             )
@@ -380,7 +378,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         )
         return
 
-    if es_callback and accion.startswith("continuar_sin_cupon_"):
+    if es_callback and accion.startswith("volver_pago_sin_cupon_"):
         try:
             row_idx_target = int(accion.split("_")[-1])
             sheet = conectar_sheets()
@@ -388,13 +386,15 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
             srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
+            
+            tipo_op = "renovacion" if safe_get(fila_obj, "Vencimiento", "") != "" else "nueva"
 
             iniciar_proceso_pago_con_descuento(
-                chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", 
+                chat_id, str_chat_id, nombre, username, srv_clave, tipo_op, 
                 row_idx_target, message_id, enviar_mensaje_callback, editar_mensaje_callback, True, cupon_aplicado=None
             )
         except Exception as e:
-            print(f"Error continuando sin cupón: {e}")
+            print(f"Error volviendo al pago: {e}")
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
         return
 
@@ -609,7 +609,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
                 registros_cuentas = sheet_cuentas.get_all_records()
 
-                # Recuperamos el nombre real capturado cuando el usuario escribió "registrar"
                 nombre_cliente_encontrado = registros_pendientes_info.pop(tid_target, None)
                 if not nombre_cliente_encontrado:
                     nombre_cliente_encontrado = f"Usuario ID {tid_target}"
@@ -2174,10 +2173,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_unico = safe_get(sub_unica, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_unico else "disney"
             
-            if existen_cupones_activos():
-                preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
-            else:
-                iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
+            # IR DIRECTAMENTE AL PAGO SIN MENÚ INTERMEDIO DE CUPÓN
+            iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_unico, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         else:
             botones_selector = []
             for sub in suscripciones:
@@ -2204,10 +2201,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_fila = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_fila else "disney"
             
-            if existen_cupones_activos():
-                preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
-            else:
-                iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
+            # IR DIRECTAMENTE AL PAGO
+            iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         except Exception as e:
             print(f"Error procesando renovación de fila específica: {e}")
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error al seleccionar la pantalla. Intenta de nuevo.", get_back_keyboard())
@@ -2246,22 +2241,15 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
         
-        if existen_cupones_activos():
-            preguntar_por_cupon_pago(chat_id, str_chat_id, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
-        else:
-            iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
+        # IR DIRECTAMENTE AL PAGO CON BOTÓN DE CUPÓN INCORPORADO
+        iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
 
     elif accion.startswith("usar_cupon_"):
         try:
             row_idx_target = int(accion.split("_")[-1])
-            sheet = conectar_sheets()
-            registros = sheet.get_all_records()
-            fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
-            srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
-            srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
-
+            
             esperando_codigo_cupon_cliente[str_chat_id] = {
-                "servicio_clave": srv_clave,
+                "servicio_clave": "netflix" if "netflix" in accion else "disney",
                 "tipo_operacion": "renovacion",
                 "row_idx_target": row_idx_target,
                 "message_id": message_id
@@ -2269,9 +2257,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
             msg_c = "🎟️ *CANJEAR CUPÓN DE DESCUENTO*\n\nPor favor, escribe a continuación el código de tu cupón:"
             if es_callback and editar_mensaje_callback:
-                editar_mensaje_callback(chat_id, message_id, msg_c, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "menu_principal"}]]})
+                editar_mensaje_callback(chat_id, message_id, msg_c, {"inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": f"volver_pago_sin_cupon_{row_idx_target}"}]]})
             else:
-                enviar_mensaje_callback(chat_id, msg_c, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "menu_principal"}]]})
+                enviar_mensaje_callback(chat_id, msg_c, {"inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": f"volver_pago_sin_cupon_{row_idx_target}"}]]})
         except Exception as e:
             print(f"Error pidiendo cupón: {e}")
         return
@@ -2309,7 +2297,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             "2️⃣ *¿Cómo obtengo el código de inicio de sesión (OTP)?*\n"
             "Primero dale a 'Enviar código' en tu TV o pantalla, espera 10 segundos y luego presiona *🔑 Solicitar Código* en el menú principal del bot.\n\n"
             "3️⃣ *¿Cómo aplico mi cupón de descuento?*\n"
-            "Cuando elijas renovar o comprar una pantalla, el bot te preguntará automáticamente si tienes un cupón antes de mostrarte los datos de pago.\n\n"
+            "En la pantalla de pago encontrarás un botón directo para insertar tu código promocional antes de transferir.\n\n"
             "4️⃣ *¿Qué pasa si sale 'Pendiente de Stock'?*\n"
             "Significa que las cuentas inmediatas están al 100%, pero puedes pagar para asegurar tu **prioridad #1** y en cuanto carguemos stock nuevo recibirás tu acceso automático.\n\n"
             "5️⃣ *¿Cuánto dura la suscripción?*\n"
@@ -2355,7 +2343,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
 
 def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
-    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets (incluyendo al admin si está registrado)."""
+    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets."""
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
@@ -2376,24 +2364,6 @@ def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
     except Exception as e:
         print(f"Error en difusión masiva: {e}")
         return 0
-
-
-def preguntar_por_cupon_pago(chat_id, str_chat_id, servicio_clave, tipo_operacion, row_idx_target, message_id, enviar_cb, editar_cb, es_cb):
-    mensaje = (
-        "🎟️ *¿TIENES UN CUPÓN DE DESCUENTO?*\n\n"
-        "Antes de mostrarte los datos de pago, ¿deseas canjear un código promocional?"
-    )
-    teclado_cupon = {
-        "inline_keyboard": [
-            [{"text": "🎟️ Sí, tengo un Cupón", "callback_data": f"usar_cupon_{row_idx_target}"}],
-            [{"text": "➡️ No, continuar sin descuento", "callback_data": f"continuar_sin_cupon_{row_idx_target}"}],
-            [{"text": "🔙 Cancelar", "callback_data": "menu_principal"}]
-        ]
-    }
-    if es_cb and editar_cb:
-        editar_cb(chat_id, message_id, mensaje, teclado_cupon)
-    else:
-        enviar_cb(chat_id, mensaje, teclado_cupon)
 
 
 def validar_y_consumir_cupon(codigo_ingresado):
@@ -2484,7 +2454,7 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
     try:
         sheet = conectar_sheets()
         hora_actual_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.update_cell(row_idx_target, 5, hora_actual_iso) # Timestamp para controlar los 30 min por debajo
+        sheet.update_cell(row_idx_target, 5, hora_actual_iso) 
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
         
         registros = sheet.get_all_records()
@@ -2529,12 +2499,17 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📸 *PASO FINAL:* Realiza el pago y **envía tu captura o referencia por este mismo chat**."
     )
-    teclado_pago = {
-        "inline_keyboard": [
-            [{"text": "💬 Soporte Técnico (Solo dudas)", "url": url_whatsapp_soporte}],
-            [{"text": "🔙 Cancelar y Volver", "callback_data": "menu_principal"}]
-        ]
-    }
+    
+    # BOTÓN DE CUPÓN DISCRETO INTEGRADO EN EL MISMO MENÚ DE PAGO
+    teclado_pago_botones = []
+    if not cupon_aplicado and existen_cupones_activos():
+        teclado_pago_botones.append([{"text": "🎟️ ¿Tienes un cupón? Canjéalo aquí", "callback_data": f"usar_cupon_{row_idx_target}"}])
+    
+    teclado_pago_botones.append([{"text": "💬 Soporte Técnico (Solo dudas)", "url": url_whatsapp_soporte}])
+    teclado_pago_botones.append([{"text": "🔙 Cancelar y Volver", "callback_data": "menu_principal"}])
+
+    teclado_pago = {"inline_keyboard": teclado_pago_botones}
+
     if es_cb and editar_cb:
         editar_cb(chat_id, message_id, mensaje, teclado_pago)
     else:
@@ -2835,7 +2810,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
@@ -3324,7 +3299,6 @@ def aprobar_suscripcion_sheet(row_idx):
 
         tipo_operacion = "Renovación" if timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 else "Pantalla Nueva"
 
-        # GESTIÓN AUTOMÁTICA DE 30 MINUTOS Y REASIGNACIÓN SILENCIOSA
         tiempo_expirado = False
         if timestamp_orden and not ("-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3):
             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
