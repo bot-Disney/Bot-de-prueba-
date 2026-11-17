@@ -1654,11 +1654,17 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                                 teclado_cliente = get_main_menu_keyboard()
                             else:
                                 if tipo_operacion == "Pantalla Nueva":
+                                    aviso_tv_especial = (
+                                        "\n\n📺 *Nota para Smart TVs (como Damasco u otros):*\n"
+                                        "Si tu televisor no muestra código numérico de 4 dígitos y te pide aprobar por correo, "
+                                        "avísanos por soporte para ayudarte a confirmarlo de inmediato."
+                                    )
                                     msg_cliente = (
                                         "🎉 *¡Tu pago ha sido verificado y aprobado!*\n\n"
                                         f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ya se encuentra *Activo*.\n"
                                         f"• *Correo:* `{cuenta_fila}`\n"
-                                        f"• *PIN de seguridad:* `{pin_entregado}` 🔒\n\n"
+                                        f"• *PIN de seguridad:* `{pin_entregado}` 🔒"
+                                        f"{aviso_tv_especial}\n\n"
                                         "📜 *NORMAS IMPORTANTES DE USO:*\n"
                                         "1️⃣ Tu pantalla es para **1 solo dispositivo** en simultáneo.\n"
                                         "2️⃣ Usa únicamente tu PIN asignado; está prohibido modificar perfiles ajenos.\n"
@@ -2577,7 +2583,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
@@ -2869,12 +2875,18 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
                         try:
                             primer_nombre = nombre_cliente.split()[0] if nombre_cliente else "Cliente"
                             pin_asignado = obtener_pin_asignado_cliente(cuenta_encontrada, perfil_correcto)
+                            aviso_tv_especial = (
+                                "\n\n📺 *Nota para Smart TVs (como Damasco u otros):*\n"
+                                "Si tu televisor no muestra código numérico de 4 dígitos y te pide aprobar por correo, "
+                                "avísanos por soporte para ayudarte a confirmarlo de inmediato."
+                            )
                             mensaje_notif = (
                                 f"🎉 *¡EXCELENTE NOTICIA, {primer_nombre}!*\n\n"
                                 f"Tu cuenta de *{servicio_cli}* ya ha sido asignada y se encuentra 100% **Activa**.\n\n"
                                 f"• *Correo asignado:* `{cuenta_encontrada}`\n"
                                 f"• *Perfil:* `{perfil_correcto}`\n"
-                                f"• *PIN de seguridad:* `{pin_asignado}` 🔒\n\n"
+                                f"• *PIN de seguridad:* `{pin_asignado}` 🔒"
+                                f"{aviso_tv_especial}\n\n"
                                 "Puedes ingresar al bot y presionar **📲 Ver mis datos / pantallas** para consultar los detalles completos de tu acceso."
                             )
                             enviar_msg_cb(int(tid_cliente), mensaje_notif, get_main_menu_keyboard())
@@ -2917,7 +2929,7 @@ def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disne
         registros = sheet.get_all_records()
         nombre_completo = f"{nombre} (@{username})" if username else nombre
 
-        # REUTILIZAR FILA PENDIENTE SI EL USUARIO YA TIENE UNA ABIIERTA PARA EL MISMO SERVICIO
+        # REUTILIZAR FILA PENDIENTE SI EL USUARIO YA TIENE UNA ABIERTA PARA EL MISMO SERVICIO
         for idx, r in enumerate(registros, start=2):
             tid = safe_get(r, "Telegram_ID", "")
             estado = safe_get(r, "Estado", "").lower()
@@ -3139,7 +3151,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
