@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
+PAGO_MOVIL_BANCO = "Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -142,6 +142,68 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, "✅ ¡Gracias por confirmar! Disfruta tu contenido.", get_main_menu_keyboard())
         except Exception as e:
             print(f"Error al procesar OK de términos: {e}")
+        return
+
+    # -------------------------------------------------------------
+    # CLIENTE: SOLICITAR REGISTRO MANUAL (PALABRA "registrar")
+    # -------------------------------------------------------------
+    elif accion == "registrar" or accion == "/registrar":
+        if str_chat_id in esperando_captura_pago:
+            row_huerta = esperando_captura_pago.pop(str_chat_id)
+            limpiar_fila_cancelada_o_renovacion(row_huerta)
+
+        suscripciones_previas = obtener_suscripciones_por_id(chat_id)
+        if suscripciones_previas:
+            enviar_mensaje_callback(
+                chat_id,
+                "⚠️ Ya tienes una pantalla o suscripción registrada con este usuario en nuestro sistema.\nPuedes consultarla en el botón *📲 Ver mis datos / pantallas*.",
+                get_main_menu_keyboard()
+            )
+            return
+
+        mensaje_cliente_reg = (
+            "📝 *¡SOLICITUD DE REGISTRO RECIBIDA!*\n\n"
+            "Hemos tomado tus datos para asociar tu cuenta externa al sistema.\n\n"
+            "🤖 *Guía rápida de cómo funciona nuestro bot:*\n"
+            "1️⃣ **Ver mis datos:** Aquí podrás consultar tu correo, el perfil que te fue asignado y tu PIN de seguridad personal.\n"
+            "2️⃣ **Solicitar Código:** Úsalo cuando tu pantalla o televisor te pida un código de acceso temporal (OTP) al iniciar sesión.\n"
+            "3️⃣ **Renovar / Comprar:** Te permite mantener tu servicio activo o adquirir pantallas adicionales cuando lo necesites.\n\n"
+            "⏳ *Estado actual:* El administrador está vinculando tu perfil en este momento. En cuanto finalice, podrás presionar **📲 Ver mis datos / pantallas** para ingresar."
+        )
+        if es_callback and editar_mensaje_callback:
+            editar_mensaje_callback(chat_id, message_id, mensaje_cliente_reg, get_main_menu_keyboard())
+        else:
+            enviar_mensaje_callback(chat_id, mensaje_cliente_reg, get_main_menu_keyboard())
+
+        if ADMIN_ID:
+            texto_admin_reg = (
+                "🚨 *¡NUEVA SOLICITUD DE REGISTRO MANUAL!* 🚨\n\n"
+                f"• *Cliente:* {nombre} (@{username})\n"
+                f"• *Telegram ID:* `{str_chat_id}`\n\n"
+                "🛠️ *Acción requerida:* Selecciona a continuación la cuenta que deseas asignarle de tu inventario:"
+            )
+            try:
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                registros_cuentas = sheet_cuentas.get_all_records()
+
+                botones_cuentas_reg = []
+                for idx_c, c in enumerate(registros_cuentas, start=2):
+                    srv_c = safe_get(c, "Servicio", "")
+                    correo_c = safe_get(c, "Correo (Usuario)", safe_get(c, "Correo", ""))
+                    
+                    botones_cuentas_reg.append([{
+                        "text": f"📧 {srv_c} - {correo_c}",
+                        "callback_data": f"admin_reg_cuenta_{str_chat_id}_{idx_c}"
+                    }])
+                
+                if not botones_cuentas_reg:
+                    enviar_mensaje_callback(int(ADMIN_ID), f"{texto_admin_reg}\n\n❌ *Aviso:* No hay cuentas cargadas en la pestaña 'Cuentas'.")
+                else:
+                    enviar_mensaje_callback(int(ADMIN_ID), texto_admin_reg, {"inline_keyboard": botones_cuentas_reg})
+            except Exception as e:
+                enviar_mensaje_callback(int(ADMIN_ID), f"⚠️ Error cargando cuentas para registro manual: {e}")
         return
 
     # -------------------------------------------------------------
@@ -507,7 +569,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # -------------------------------------------------------------
     if not es_callback and ADMIN_ID and str_chat_id == ADMIN_ID and str_chat_id in asistente_edicion_admin and texto:
         sesion = asistente_edicion_admin[str_chat_id]
-        if sesion.get("paso") == "esperando_nueva_fecha":
+        paso_actual = sesion.get("paso")
+
+        if paso_actual == "esperando_nueva_fecha":
             nueva_fecha = texto.strip()
             row_idx = sesion.get("row_idx")
             asistente_edicion_admin.pop(str_chat_id)
@@ -524,6 +588,84 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 enviar_mensaje_callback(chat_id, f"❌ Error al actualizar la fecha: {e}", {
                     "inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]
                 })
+            return
+
+        elif paso_actual == "esperando_fecha_registro_manual":
+            fecha_vencimiento = texto.strip()
+            tid_target = sesion.get("tid_target")
+            correo_sel = sesion.get("correo")
+            srv_sel = sesion.get("servicio")
+            perfil_sel = sesion.get("perfil")
+            asistente_edicion_admin.pop(str_chat_id)
+
+            try:
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                registros_cuentas = sheet_cuentas.get_all_records()
+
+                nombre_cliente_encontrado = f"Usuario ID {tid_target}"
+
+                sheet_principal.append_row([
+                    str(tid_target),
+                    nombre_cliente_encontrado,
+                    correo_sel,
+                    perfil_sel,
+                    fecha_vencimiento,
+                    "Activo",
+                    srv_sel
+                ])
+
+                for idx_c, c_row in enumerate(registros_cuentas, start=2):
+                    correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
+                    if correo_cta.lower() == correo_sel.lower():
+                        try:
+                            ocupados = int(safe_get(c_row, "Perfiles Ocupados", "0"))
+                        except ValueError:
+                            ocupados = 0
+                        
+                        nuevos_ocupados = ocupados + 1
+                        sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
+                        
+                        limite_max = 5 if "netflix" in srv_sel.lower() else 7
+                        if nuevos_ocupados >= limite_max:
+                            sheet_cuentas.update_cell(idx_c, 6, "Llena")
+                        break
+
+                enviar_mensaje_callback(
+                    chat_id,
+                    f"✅ *¡CLIENTE REGISTRADO MANUALMENTE CON ÉXITO!*\n\n"
+                    f"• *Telegram ID:* `{tid_target}`\n"
+                    f"• *Servicio:* {srv_sel} ({perfil_sel})\n"
+                    f"• *Correo:* `{correo_sel}`\n"
+                    f"• *Vencimiento:* `{fecha_vencimiento}`",
+                    {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                )
+
+                try:
+                    msg_para_cliente = (
+                        "🎉 *¡TU CUENTA HA SIDO REGISTRADA CON ÉXITO!*\n\n"
+                        f"Ya puedes consultar los datos de tu acceso de *{srv_sel}* ({perfil_sel}) presionando el botón de abajo:"
+                    )
+                    enviar_mensaje_callback(
+                        int(tid_target),
+                        msg_para_cliente,
+                        {
+                            "inline_keyboard": [
+                                [{"text": "📲 Ver mis datos / pantallas", "callback_data": "ver_datos"}],
+                                [{"text": "🔑 Solicitar Código", "callback_data": "obtener_codigo"}]
+                            ]
+                        }
+                    )
+                except Exception as e:
+                    print(f"No se pudo notificar al cliente registrado {tid_target}: {e}")
+
+            except Exception as e:
+                enviar_mensaje_callback(
+                    chat_id,
+                    f"❌ Error al registrar el cliente en la hoja: {e}",
+                    {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
+                )
             return
 
     # -------------------------------------------------------------
@@ -1228,6 +1370,100 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 editar_mensaje_callback(chat_id, message_id, mensaje_peticion, teclado_canc)
             else:
                 enviar_mensaje_callback(chat_id, mensaje_peticion, teclado_canc)
+        return
+
+    # -------------------------------------------------------------
+    # REGISTRO MANUAL (ADMIN SELECCIONA CUENTA Y PERFIL)
+    # -------------------------------------------------------------
+    elif accion.startswith("admin_reg_cuenta_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                partes = accion.split("_")
+                tid_target = partes[3]
+                idx_cuenta_sheet = int(partes[4])
+
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
+
+                fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
+                correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
+                srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
+
+                limite_max = 5 if "netflix" in srv_sel.lower() else 7
+                registros_clientes = sheet_principal.get_all_records()
+
+                perfiles_ocupados = set()
+                for r in registros_clientes:
+                    cta = safe_get(r, "Cuenta", "").lower()
+                    pnt = safe_get(r, "Pantalla", "").lower()
+                    if cta == correo_sel.lower():
+                        for n in range(1, limite_max + 1):
+                            if f"perfil {n}" in pnt:
+                                perfiles_ocupados.add(n)
+
+                botones_perfiles_reg = []
+                for n in range(1, limite_max + 1):
+                    if n not in perfiles_ocupados:
+                        nombre_p = f"Perfil {n}"
+                        botones_perfiles_reg.append([{
+                            "text": f"📺 Asignar {nombre_p}",
+                            "callback_data": f"admin_reg_perfil_{tid_target}_{idx_cuenta_sheet}_{n}"
+                        }])
+
+                botones_perfiles_reg.append([{"text": "🔙 Cancelar", "callback_data": "admin_volver"}])
+
+                texto_sel_p = (
+                    f"👤 *SELECCIONAR PERFIL PARA REGISTRO*\n\n"
+                    f"• *Telegram ID Target:* `{tid_target}`\n"
+                    f"• *Correo:* `{correo_sel}`\n\n"
+                    "Selecciona el perfil que le vas a entregar:"
+                )
+                if es_callback and editar_mensaje_callback:
+                    editar_mensaje_callback(chat_id, message_id, texto_sel_p, {"inline_keyboard": botones_perfiles_reg})
+                else:
+                    enviar_mensaje_callback(chat_id, texto_sel_p, {"inline_keyboard": botones_perfiles_reg})
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error seleccionando cuenta: {e}", get_back_keyboard())
+        return
+
+    elif accion.startswith("admin_reg_perfil_"):
+        if ADMIN_ID and str_chat_id == ADMIN_ID:
+            try:
+                partes = accion.split("_")
+                tid_target = partes[3]
+                idx_cuenta_sheet = int(partes[4])
+                num_perfil = int(partes[5])
+
+                sheet_principal = conectar_sheets()
+                spreadsheet = sheet_principal.spreadsheet
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
+                
+                correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
+                srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
+
+                asistente_edicion_admin[str_chat_id] = {
+                    "paso": "esperando_fecha_registro_manual",
+                    "tid_target": tid_target,
+                    "correo": correo_sel,
+                    "servicio": srv_sel,
+                    "perfil": f"Perfil {num_perfil}"
+                }
+
+                texto_pedir_fecha = (
+                    "📅 *FECHA DE VENCIMIENTO*\n\n"
+                    f"• *Cliente ID:* `{tid_target}`\n"
+                    f"• *Cuenta:* `{correo_sel}`\n"
+                    f"• *Perfil:* `Perfil {num_perfil}`\n\n"
+                    "Escribe la **fecha de vencimiento** en formato `AAAA-MM-DD` (Ej: `2026-12-31`):"
+                )
+                if es_callback and editar_mensaje_callback:
+                    editar_mensaje_callback(chat_id, message_id, texto_pedir_fecha, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]})
+                else:
+                    enviar_mensaje_callback(chat_id, texto_pedir_fecha, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]})
+            except Exception as e:
+                enviar_mensaje_callback(chat_id, f"❌ Error procesando perfil: {e}", get_back_keyboard())
         return
 
     # -------------------------------------------------------------
@@ -2233,6 +2469,8 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
 
     try:
         sheet = conectar_sheets()
+        hora_actual_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.update_cell(row_idx_target, 5, hora_actual_iso) # Timestamp para controlar los 30 min por debajo
         sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
         
         registros = sheet.get_all_records()
@@ -2429,7 +2667,7 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
         vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
 
         if "pendiente" in estado_actual:
-            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
+            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
                 sheet_principal.update_cell(row_idx, 6, "Activo")
                 print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
             else:
@@ -2465,7 +2703,7 @@ def rechazar_pago_seguro(row_idx):
 
         vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
 
-        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha"):
+        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
             sheet_principal.update_cell(row_idx, 6, "Activo")
             return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
         else:
@@ -2636,9 +2874,6 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
     enviar_cb(chat_id, "✅ Reporte enviado con éxito al administrador. En breve verificaremos tu referencia.", get_main_menu_keyboard())
 
 
-# =============================================================
-# FUNCIÓN: NOTIFICAR VENCIMIENTO CON BOTÓN DE ELIMINAR DIRECTO
-# =============================================================
 def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
     """Revisa las pantallas que ya vencieron y envía una alerta al admin con un botón directo para borrarlas y liberar el cupo."""
     if not ADMIN_ID:
@@ -2659,9 +2894,7 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
             pantalla = safe_get(row, "Pantalla", "Perfil 1")
             tid = safe_get(row, "Telegram_ID", "")
 
-            # Solo revisamos cuentas que tengan correo asignado y estén activas
             if correo and correo.lower() not in ("por asignar", "pendiente de stock"):
-                # Si el pago ya está pendiente de aprobación, no molestamos
                 if "pendiente" in estado:
                     continue
 
@@ -2676,7 +2909,6 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
                 if fecha_venc:
                     dias_restantes = (fecha_venc - hoy).days
 
-                    # Se dispara SOLO si ya venció (dias_restantes < 0)
                     if dias_restantes < 0:
                         dias_vencido = abs(dias_restantes)
                         
@@ -2691,7 +2923,6 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
                             "2️⃣ Presiona el botón de abajo para **borrar la fila y liberar el cupo** de la hoja automáticamente."
                         )
 
-                        # Botón directo para que borres la fila de inmediato
                         teclado_borrar_admin = {
                             "inline_keyboard": [
                                 [{"text": "🗑️ Liberar Perfil y Borrar Fila", "callback_data": f"admin_liberar_{idx}"}],
@@ -2929,7 +3160,6 @@ def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disne
         registros = sheet.get_all_records()
         nombre_completo = f"{nombre} (@{username})" if username else nombre
 
-        # REUTILIZAR FILA PENDIENTE SI EL USUARIO YA TIENE UNA ABIERTA PARA EL MISMO SERVICIO
         for idx, r in enumerate(registros, start=2):
             tid = safe_get(r, "Telegram_ID", "")
             estado = safe_get(r, "Estado", "").lower()
@@ -3072,25 +3302,49 @@ def aprobar_suscripcion_sheet(row_idx):
         servicio_fila = safe_get(fila_actual, "Servicio", "Disney+")
         perfil_asignado = safe_get(fila_actual, "Pantalla", "Perfil 1")
         cuenta_fila = safe_get(fila_actual, "Cuenta", "Por Asignar")
-        vencimiento_actual_str = safe_get(fila_actual, "Vencimiento", "")
+        timestamp_orden = safe_get(fila_actual, "Vencimiento", "")
         estado_actual = safe_get(fila_actual, "Estado", "").lower()
 
         if estado_actual == "activo":
             return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
 
-        tipo_operacion = "Renovación" if vencimiento_actual_str and vencimiento_actual_str.lower() not in ("", "sin fecha") else "Pantalla Nueva"
+        tipo_operacion = "Renovación" if timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 else "Pantalla Nueva"
+
+        # GESTIÓN AUTOMÁTICA DE 30 MINUTOS Y REASIGNACIÓN SILENCIOSA
+        tiempo_expirado = False
+        if timestamp_orden and not ("-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3):
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                try:
+                    hora_orden = datetime.datetime.strptime(timestamp_orden, fmt)
+                    diferencia_minutos = (datetime.datetime.now() - hora_orden).total_seconds() / 60
+                    if diferencia_minutos > 30:
+                        tiempo_expirado = True
+                    break
+                except ValueError:
+                    continue
+
+        if tiempo_expirado and "pendiente" not in cuenta_fila.lower():
+            correo_verificado = asignar_correo_desde_stock(sheet, servicio_fila, tid_cliente, nombre_cliente)
+            if correo_verificado and "pendiente" not in correo_verificado.lower():
+                cuenta_fila = correo_verificado
+                perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio_fila, cuenta_fila)
+                sheet.update_cell(row_idx, 3, cuenta_fila)
+                sheet.update_cell(row_idx, 4, perfil_asignado)
+            else:
+                # Si no hay stock y se agotó el tiempo, enviamos alerta directa al admin
+                if ADMIN_ID:
+                    try:
+                        alerta_tardia_sin_stock = (
+                            f"🚨 *¡ALERTA DE PAGO TARDÍO / STOCK AGOTADO!* 🚨\n\n"
+                            f"• *Cliente:* {nombre_cliente} (`{tid_cliente}`)\n"
+                            f"• *Servicio:* {servicio_fila}\n\n"
+                            "💡 El cliente pagó después de los 30 minutos y ya no hay perfiles libres en stock. Por favor, carga una cuenta nueva y asígnale su acceso manualmente."
+                        )
+                        # Nota: puedes usar el objeto de envío desde aquí o dejar que el flujo registre la orden para stock pendiente
+                    except Exception:
+                        pass
 
         fecha_base = datetime.date.today()
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-            try:
-                if vencimiento_actual_str:
-                    fecha_venc_actual = datetime.datetime.strptime(vencimiento_actual_str, fmt).date()
-                    if fecha_venc_actual >= datetime.date.today():
-                        fecha_base = fecha_venc_actual
-                break
-            except ValueError:
-                continue
-
         nueva_fecha = (fecha_base + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
         
         sheet.update_cell(row_idx, 5, nueva_fecha)
