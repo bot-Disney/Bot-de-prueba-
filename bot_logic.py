@@ -13,9 +13,9 @@ ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
 # =============================================================
 PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
 PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
+TASA_RESPALDO_BS = 65.0   # Tasa de respaldo por si fallan las consultas externas
 
-PAGO_MOVIL_BANCO = "Provincial (0108)"
+PAGO_MOVIL_BANCO = "🏦 Provincial (0108)"
 PAGO_MOVIL_CEDULA = "27538779"
 PAGO_MOVIL_TELEFONO = "04247091547"
 
@@ -1780,7 +1780,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"🔹 *Suscripción #{idx} ({servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
-                    f"• *PIN:* {pin_mostrar} 🔒\n"
+                    f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
                     f"• *Vencimiento:* {vencimiento} {alerta_vencimiento}\n"
                     f"• *Estado:* {estado}"
                 )
@@ -2631,10 +2631,10 @@ def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat
 
 
 # =============================================================
-# FUNCIÓN NUEVA: NOTIFICAR AL ADMIN CUANDO UNA PANTALLA YA VENCIÓ
+# FUNCIÓN: NOTIFICAR VENCIMIENTO CON BOTÓN DE ELIMINAR DIRECTO
 # =============================================================
 def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
-    """Revisa las pantallas que ya vencieron (ayer o antes) y cuyo cliente aún no ha reportado pago."""
+    """Revisa las pantallas que ya vencieron y envía una alerta al admin con un botón directo para borrarlas y liberar el cupo."""
     if not ADMIN_ID:
         return "No hay ADMIN_ID configurado."
 
@@ -2653,9 +2653,9 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
             pantalla = safe_get(row, "Pantalla", "Perfil 1")
             tid = safe_get(row, "Telegram_ID", "")
 
-            # Solo revisamos cuentas que tengan correo asignado
+            # Solo revisamos cuentas que tengan correo asignado y estén activas
             if correo and correo.lower() not in ("por asignar", "pendiente de stock"):
-                # Si el cliente ya está pagando o pendiente, lo ignoramos para no molestar
+                # Si el pago ya está pendiente de aprobación, no molestamos
                 if "pendiente" in estado:
                     continue
 
@@ -2675,16 +2675,26 @@ def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
                         dias_vencido = abs(dias_restantes)
                         
                         alerta_vencimiento_admin = (
-                            "🔴 *ALERTA: PERFIL VENCIDO SIN RENOVACIÓN* 🔴\n\n"
+                            "🔴 *ALERTA: PERFIL VENCIDO — ACCIÓN REQUERIDA* 🔴\n\n"
                             f"• *Vencimiento:* Hace {dias_vencido} día(s)\n"
                             f"• *Cliente:* {nombre_cliente} (`{tid}`)\n"
                             f"• *Servicio:* {servicio} ({pantalla})\n"
                             f"• *Correo Maestro:* `{correo}`\n\n"
-                            "🛠️ *Acción:* Como el cliente aún no ha pagado, entra a la plataforma y **cierra la sesión / cambia el PIN** de este perfil."
+                            "🛠️ *Pasos a seguir:*\n"
+                            "1️⃣ Entra a Netflix o Disney+ y **cierra la sesión / cambia el PIN** de este perfil para bloquear el acceso.\n"
+                            "2️⃣ Presiona el botón de abajo para **borrar la fila y liberar el cupo** de la hoja automáticamente."
                         )
 
+                        # Botón directo para que borres la fila de inmediato
+                        teclado_borrar_admin = {
+                            "inline_keyboard": [
+                                [{"text": "🗑️ Liberar Perfil y Borrar Fila", "callback_data": f"admin_liberar_{idx}"}],
+                                [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
+                            ]
+                        }
+
                         try:
-                            enviar_msg_cb(int(ADMIN_ID), alerta_vencimiento_admin)
+                            enviar_msg_cb(int(ADMIN_ID), alerta_vencimiento_admin, teclado_borrar_admin)
                             avisos_enviados += 1
                             time.sleep(0.2)
                         except Exception as e:
@@ -2904,8 +2914,18 @@ def obtener_suscripciones_por_id(chat_id):
 def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disney", enviar_mensaje_cb=None):
     try:
         sheet = conectar_sheets()
+        registros = sheet.get_all_records()
         nombre_completo = f"{nombre} (@{username})" if username else nombre
-        
+
+        # REUTILIZAR FILA PENDIENTE SI EL USUARIO YA TIENE UNA ABIIERTA PARA EL MISMO SERVICIO
+        for idx, r in enumerate(registros, start=2):
+            tid = safe_get(r, "Telegram_ID", "")
+            estado = safe_get(r, "Estado", "").lower()
+            srv = safe_get(r, "Servicio", "").lower()
+            
+            if tid == str_chat_id and "pendiente" in estado and servicio.lower() in srv:
+                return idx
+
         correo_asignado = asignar_correo_desde_stock(sheet, servicio, str_chat_id, nombre_completo, enviar_mensaje_cb)
         perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio, correo_asignado)
         
@@ -3119,7 +3139,7 @@ def generar_reporte_admin():
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
+        activos = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
         pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
         en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
         vencidos_total = len(obtener_suscripciones_vencidas())
@@ -3224,7 +3244,7 @@ def get_main_menu_keyboard():
         "inline_keyboard": [
             [{"text": "📲 Ver mis datos / pantallas", "callback_data": "ver_datos"}],
             [{"text": "🔑 Solicitar Código", "callback_data": "obtener_codigo"}],
-            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "➕ Comprar Pantalla", "callback_data": "comprar_extra"}],
+            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "➕ Otra Pantalla", "callback_data": "comprar_extra"}],
             [{"text": "💬 Soporte / Pagos", "callback_data": "soporte"}]
         ]
     }
