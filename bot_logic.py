@@ -2,6 +2,7 @@ import os
 import time
 import datetime
 import requests
+import threading
 from sheets_db import conectar_sheets
 from gmail_otp import obtener_ultimo_codigo_disney, obtener_ultimo_codigo_netflix
 
@@ -9,6 +10,11 @@ try:
     from zoneinfo import ZoneInfo
 except ImportError:
     ZoneInfo = None
+
+# =============================================================
+# CONTROL DE CONCURRENCIA (THREADS LOCK)
+# =============================================================
+candado_operaciones = threading.Lock()
 
 WHATSAPP_NUMERO = "584247091547"
 ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
@@ -2381,63 +2387,64 @@ def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
 
 
 def validar_y_consumir_cupon(codigo_ingresado):
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
+    with candado_operaciones:  # <--- BLOQUEO SEGURO DE CONCURRENCIA
         try:
-            sheet_cupones = spreadsheet.worksheet("Cupones")
-        except Exception:
-            return False, "❌ El cupón ingresado no existe."
-
-        registros = sheet_cupones.get_all_records()
-        ahora = obtener_hora_venezuela().replace(tzinfo=None)
-
-        for idx, row in enumerate(registros, start=2):
-            codigo_db = safe_get(row, "Codigo", "").upper()
+            sheet_principal = conectar_sheets()
+            spreadsheet = sheet_principal.spreadsheet
             
-            if codigo_db == codigo_ingresado.upper():
-                estado = safe_get(row, "Estado", "Activo").lower()
-                if estado != "activo":
-                    return False, "❌ Este cupón ya expiró o no está disponible."
+            try:
+                sheet_cupones = spreadsheet.worksheet("Cupones")
+            except Exception:
+                return False, "❌ El cupón ingresado no existe."
 
-                fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
-                duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
+            registros = sheet_cupones.get_all_records()
+            ahora = obtener_hora_venezuela().replace(tzinfo=None)
+
+            for idx, row in enumerate(registros, start=2):
+                codigo_db = safe_get(row, "Codigo", "").upper()
                 
-                if fecha_creacion_str and duracion_horas_str.isdigit():
-                    duracion_horas = int(duracion_horas_str)
-                    if duracion_horas > 0:
-                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                            try:
-                                fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
-                                fecha_expiracion = fecha_creacion + datetime.timedelta(hours=duracion_horas)
-                                
-                                if ahora > fecha_expiracion:
-                                    sheet_cupones.update_cell(idx, 8, "Expirado")
-                                    return False, "⏳ ¡Este cupón relámpago ya expiró!"
-                                break
-                            except ValueError:
-                                continue
+                if codigo_db == codigo_ingresado.upper():
+                    estado = safe_get(row, "Estado", "Activo").lower()
+                    if estado != "activo":
+                        return False, "❌ Este cupón ya expiró o no está disponible."
 
-                usos_max = int(safe_get(row, "Usos Maximos", "999999"))
-                veces_usado = int(safe_get(row, "Veces Usado", "0"))
+                    fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
+                    duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
+                    
+                    if fecha_creacion_str and duracion_horas_str.isdigit():
+                        duracion_horas = int(duracion_horas_str)
+                        if duracion_horas > 0:
+                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                                try:
+                                    fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
+                                    fecha_expiracion = fecha_creacion + datetime.timedelta(hours=duracion_horas)
+                                    
+                                    if ahora > fecha_expiracion:
+                                        sheet_cupones.update_cell(idx, 8, "Expirado")
+                                        return False, "⏳ ¡Este cupón relámpago ya expiró!"
+                                    break
+                                except ValueError:
+                                    continue
 
-                if veces_usado >= usos_max:
-                    sheet_cupones.update_cell(idx, 8, "Agotado")
-                    return False, "❌ Este cupón ya alcanzó su límite máximo de usos."
+                    usos_max = int(safe_get(row, "Usos Maximos", "999999"))
+                    veces_usado = int(safe_get(row, "Veces Usado", "0"))
 
-                sheet_cupones.update_cell(idx, 7, veces_usado + 1)
-                if (veces_usado + 1) >= usos_max and duracion_horas == 0:
-                    sheet_cupones.update_cell(idx, 8, "Agotado")
+                    if veces_usado >= usos_max:
+                        sheet_cupones.update_cell(idx, 8, "Agotado")
+                        return False, "❌ Este cupón ya alcanzó su límite máximo de usos."
 
-                tipo_desc = safe_get(row, "Tipo", "Fijo")
-                valor_desc = float(safe_get(row, "Valor", "0"))
-                return True, {"tipo": tipo_desc, "valor": valor_desc, "codigo": codigo_db}
+                    sheet_cupones.update_cell(idx, 7, veces_usado + 1)
+                    if (veces_usado + 1) >= usos_max and duracion_horas == 0:
+                        sheet_cupones.update_cell(idx, 8, "Agotado")
 
-        return False, "❌ El código de cupón ingresado es inválido."
-    except Exception as e:
-        print(f"Error validando cupón: {e}")
-        return False, "❌ Ocurrió un error al validar el cupón."
+                    tipo_desc = safe_get(row, "Tipo", "Fijo")
+                    valor_desc = float(safe_get(row, "Valor", "0"))
+                    return True, {"tipo": tipo_desc, "valor": valor_desc, "codigo": codigo_db}
+
+            return False, "❌ El código de cupón ingresado es inválido."
+        except Exception as e:
+            print(f"Error validando cupón: {e}")
+            return False, "❌ Ocurrió un error al validar el cupón."
 
 
 def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, servicio_clave, tipo_operacion, row_idx_target, message_id, enviar_cb, editar_cb, es_cb, cupon_aplicado=None):
@@ -2823,7 +2830,7 @@ def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb,
     if codigo:
         mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
     else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado en tu TV hace unos segundos e intenta de nuevo."
+        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
 
     teclado = get_back_keyboard()
     if es_cb and editar_cb:
@@ -2977,66 +2984,67 @@ def obtener_primer_perfil_disponible(sheet, servicio_solicitado, correo_asignado
 
 
 def asignar_correo_desde_stock(sheet_principal, servicio_solicitado, chat_id="", nombre_cliente="", enviar_mensaje_callback=None):
-    try:
-        spreadsheet = sheet_principal.spreadsheet
+    with candado_operaciones:  # <--- BLOQUEO SEGURO DE CONCURRENCIA
         try:
-            sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        except Exception:
-            return "Por Asignar"
-
-        registros_cuentas = sheet_cuentas.get_all_records()
-        
-        for idx_c, cuenta_row in enumerate(registros_cuentas, start=2):
-            srv_cuenta = safe_get(cuenta_row, "Servicio", "").lower()
-            estado_cuenta = safe_get(cuenta_row, "Estado", "").lower()
-            
-            if servicio_solicitado.lower() in srv_cuenta and estado_cuenta == "activa":
-                try:
-                    limite_defecto = 5 if "netflix" in servicio_solicitado.lower() else 7
-                    capacidad = int(safe_get(cuenta_row, "Capacidad Total", str(limite_defecto)))
-                    ocupados = int(safe_get(cuenta_row, "Perfiles Ocupados", "0"))
-                except ValueError:
-                    capacidad = 5 if "netflix" in servicio_solicitado.lower() else 7
-                    ocupados = 0
-
-                if ocupados < capacidad:
-                    correo_encontrado = safe_get(cuenta_row, "Correo (Usuario)", safe_get(cuenta_row, "Correo", ""))
-                    
-                    nuevos_ocupados = ocupados + 1
-                    sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                    
-                    if nuevos_ocupados >= capacidad:
-                        sheet_cuentas.update_cell(idx_c, 6, "Llena")
-                        if ADMIN_ID and enviar_mensaje_callback:
-                            alerta_stock = (
-                                f"⚠️ *¡ALERTA DE STOCK AGOTADO!* ⚠️\n\n"
-                                f"La cuenta de *{servicio_solicitado}* (`{correo_encontrado}`) ha llegado al 100% de su capacidad y está *Llena*.\n\n"
-                                f"💡 *Acción recomendada:* Carga una nueva cuenta en la pestaña 'Cuentas' lo antes posible."
-                            )
-                            try:
-                                enviar_mensaje_callback(int(ADMIN_ID), alerta_stock)
-                            except Exception:
-                                pass
-                        
-                    return correo_encontrado
-                    
-        if ADMIN_ID and enviar_mensaje_callback:
-            alerta_sin_stock = (
-                f"🚨 *¡COMPRA CON STOCK AGOTADO (LISTA DE ESPERA)!* 🚨\n\n"
-                f"• *Cliente:* {nombre_cliente}\n"
-                f"• *Telegram ID:* `{chat_id}`\n"
-                f"• *Servicio:* {servicio_solicitado}\n\n"
-                f"💡 El cliente avanzó a pagar pero no había cuentas activas. Quedó marcado como *Pendiente de Stock*. ¡Carga una cuenta nueva y usa el botón *Asignar Stock Pendiente* en `/admin`!"
-            )
+            spreadsheet = sheet_principal.spreadsheet
             try:
-                enviar_mensaje_callback(int(ADMIN_ID), alerta_sin_stock)
+                sheet_cuentas = spreadsheet.worksheet("Cuentas")
             except Exception:
-                pass
+                return "Por Asignar"
 
-        return "⚠️ Pendiente de Stock"
-    except Exception as e:
-        print(f"Error asignando correo desde stock: {e}")
-        return "Por Asignar"
+            registros_cuentas = sheet_cuentas.get_all_records()
+            
+            for idx_c, cuenta_row in enumerate(registros_cuentas, start=2):
+                srv_cuenta = safe_get(cuenta_row, "Servicio", "").lower()
+                estado_cuenta = safe_get(cuenta_row, "Estado", "").lower()
+                
+                if servicio_solicitado.lower() in srv_cuenta and estado_cuenta == "activa":
+                    try:
+                        limite_defecto = 5 if "netflix" in servicio_solicitado.lower() else 7
+                        capacidad = int(safe_get(cuenta_row, "Capacidad Total", str(limite_defecto)))
+                        ocupados = int(safe_get(cuenta_row, "Perfiles Ocupados", "0"))
+                    except ValueError:
+                        capacidad = 5 if "netflix" in servicio_solicitado.lower() else 7
+                        ocupados = 0
+
+                    if ocupados < capacidad:
+                        correo_encontrado = safe_get(cuenta_row, "Correo (Usuario)", safe_get(cuenta_row, "Correo", ""))
+                        
+                        nuevos_ocupados = ocupados + 1
+                        sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
+                        
+                        if nuevos_ocupados >= capacidad:
+                            sheet_cuentas.update_cell(idx_c, 6, "Llena")
+                            if ADMIN_ID and enviar_mensaje_callback:
+                                alerta_stock = (
+                                    f"⚠️ *¡ALERTA DE STOCK AGOTADO!* ⚠️\n\n"
+                                    f"La cuenta de *{servicio_solicitado}* (`{correo_encontrado}`) ha llegado al 100% de su capacidad y está *Llena*.\n\n"
+                                    f"💡 *Acción recomendada:* Carga una nueva cuenta en la pestaña 'Cuentas' lo antes posible."
+                                )
+                                try:
+                                    enviar_mensaje_callback(int(ADMIN_ID), alerta_stock)
+                                except Exception:
+                                    pass
+                            
+                        return correo_encontrado
+                        
+            if ADMIN_ID and enviar_mensaje_callback:
+                alerta_sin_stock = (
+                    f"🚨 *¡COMPRA CON STOCK AGOTADO (LISTA DE ESPERA)!* 🚨\n\n"
+                    f"• *Cliente:* {nombre_cliente}\n"
+                    f"• *Telegram ID:* `{chat_id}`\n"
+                    f"• *Servicio:* {servicio_solicitado}\n\n"
+                    f"💡 El cliente avanzó a pagar pero no había cuentas activas. Quedó marcado como *Pendiente de Stock*. ¡Carga una cuenta nueva y usa el botón *Asignar Stock Pendiente* en `/admin`!"
+                )
+                try:
+                    enviar_mensaje_callback(int(ADMIN_ID), alerta_sin_stock)
+                except Exception:
+                    pass
+
+            return "⚠️ Pendiente de Stock"
+        except Exception as e:
+            print(f"Error asignando correo desde stock: {e}")
+            return "Por Asignar"
 
 
 def procesar_asignacion_stock_masivo(enviar_msg_cb):
