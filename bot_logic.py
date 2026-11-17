@@ -3510,7 +3510,7 @@ def get_main_menu_keyboard():
         "inline_keyboard": [
             [{"text": "📲 Ver mis datos / pantallas", "callback_data": "ver_datos"}],
             [{"text": "🔑 Solicitar Código", "callback_data": "obtener_codigo"}],
-            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "➕ Otra Pantalla", "callback_data": "comprar_extra"}],
+            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "🛒 Comprar Pantalla", "callback_data": "comprar_extra"}],
             [{"text": "💬 Soporte / Pagos", "callback_data": "soporte"}]
         ]
     }
@@ -3526,7 +3526,7 @@ def get_datos_keyboard(mostrar_renovar=False, suscripciones=None):
     if mostrar_renovar: 
         botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}],)
         
-    botones.append([{"text": "➕ Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
+    botones.append([{"text": "🛒 Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
     botones.append([{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}])
     return {"inline_keyboard": botones}
 
