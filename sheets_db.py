@@ -18,7 +18,7 @@ def conectar_sheets():
         
         # ⚠️ IMPORTANTE: Asegúrate de que "Disney_Inventario" sea el nombre exacto de tu archivo en Drive
         # y que la pestaña de abajo se llame exactamente "Clientes"
-        sheet = client.open("Disney_Inventario").worksheet("Clientes")
+        sheet = client.open("Pruebas Bot Streaming").worksheet("Clientes")
         return sheet
 
     except Exception as e:
