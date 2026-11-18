@@ -1,10 +1,11 @@
 import os
 import time
+import datetime
 import threading
 import requests
 from fastapi import FastAPI, Request
-from bot_logic import procesar_mensaje_bot
-from alertas import revisar_y_enviar_alertas_vencimiento  # <--- Importamos tu módulo de alertas
+from bot_logic import procesar_mensaje_bot, conectar_sheets, safe_get, liberar_y_eliminar_fila_suscripcion, obtener_hora_venezuela
+from alertas import revisar_y_enviar_alertas_vencimiento
 
 app = FastAPI()
 
@@ -13,6 +14,61 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 # Diccionario temporal para prevenir doble clic / spam de botones
 clics_procesados = {}
+
+# =============================================================
+# HILO VIGILANTE DE PAGOS PENDIENTES (30 MINUTOS)
+# =============================================================
+def iniciar_vigilante_pagos_pendientes():
+    """Revisa cada 2 minutos si hay filas en 'Pendiente Pago' con más de 30 minutos sin comprobante y las libera."""
+    def bucle_vigilante():
+        time.sleep(15)  # Espera inicial al arrancar el servidor
+        while True:
+            try:
+                sheet = conectar_sheets()
+                registros = sheet.get_all_records()
+                ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
+
+                for idx, row in enumerate(registros, start=2):
+                    estado = safe_get(row, "Estado", "").lower()
+                    
+                    # Solo vigilamos a los que se quedaron estáticos en 'Pendiente Pago'
+                    if estado == "pendiente pago":
+                        # Buscamos la fecha o timestamp guardado en Vencimiento u otra celda temporal
+                        timestamp_orden = safe_get(row, "Vencimiento", "")
+                        
+                        if timestamp_orden and len(timestamp_orden) == 19 and "-" in timestamp_orden:
+                            try:
+                                hora_orden = datetime.datetime.strptime(timestamp_orden, "%Y-%m-%d %H:%M:%S")
+                                diferencia_minutos = (ahora_local - hora_orden).total_seconds() / 60
+                                
+                                if diferencia_minutos > 30:
+                                    tid_cliente = safe_get(row, "Telegram_ID", "")
+                                    srv_vencido = safe_get(row, "Servicio", "Streaming")
+                                    
+                                    # Liberamos la fila y el cupo en stock
+                                    liberar_y_eliminar_fila_suscripcion(idx)
+                                    print(f"🧹 Fila {idx} eliminada automáticamente por superar los 30 minutos sin reportar pago.")
+                                    
+                                    if tid_cliente:
+                                        try:
+                                            msg_vencido = (
+                                                "⏳ *TIEMPO DE ESPERA AGOTADO*\n\n"
+                                                f"Tu orden pendiente para *{srv_vencido}* ha expirado al superarse los 30 minutos sin reportar pago.\n"
+                                                "Tu cupo ha sido liberado. Cuando gustes, puedes generar una nueva solicitud desde el menú."
+                                            )
+                                            enviar_mensaje_telegram(int(tid_cliente), msg_vencido)
+                                        except Exception:
+                                            pass
+                            except ValueError:
+                                pass
+            except Exception as e:
+                print(f"Error en el hilo vigilante de pagos de 30 min: {e}")
+            
+            time.sleep(120)  # Revisa cada 2 minutos
+
+    hilo_v = threading.Thread(target=bucle_vigilante, daemon=True)
+    hilo_v.start()
+    print("🛡️ Vigilante automático de 30 minutos para pagos pendientes iniciado en segundo plano.")
 
 # =============================================================
 # HILO EN SEGUNDO PLANO PARA LAS ALERTAS DIARIAS
@@ -38,6 +94,7 @@ def iniciar_reloj_alertas():
 def startup_event():
     print("¡El servidor, el lector de Gmail y el bot interactivo se han iniciado en Render!")
     iniciar_reloj_alertas()
+    iniciar_vigilante_pagos_pendientes()
 
 
 @app.get("/")
@@ -50,7 +107,6 @@ async def recibir_webhook(request: Request):
     try:
         data = await request.json()
         
-        # 1. Si el usuario hizo clic en un botón flotante (Inline Keyboard)
         if "callback_query" in data:
             cb = data["callback_query"]
             chat_id = cb["message"]["chat"]["id"]
@@ -61,12 +117,10 @@ async def recibir_webhook(request: Request):
             nombre = cb["from"].get("first_name", "Cliente")
             username = cb["from"].get("username", "")
             
-            # --- FILTRO ANTISPAM / DOBLE CLIC ESTRICTO ---
             ahora = time.time()
             if str(chat_id) in clics_procesados:
                 tiempo_transcurrido = ahora - clics_procesados[str(chat_id)]
-                if tiempo_transcurrido < 2.0:  # Si intenta repetir en menos de 2 segundos
-                    # ¡Solo al usuario ansioso le sale el aviso flotante!
+                if tiempo_transcurrido < 2.0:
                     responder_callback_telegram(callback_id, "⏳ ¡Acción en proceso, espera un momento!")
                     return {"status": "ignorado_por_doble_clic"}
             
@@ -76,9 +130,7 @@ async def recibir_webhook(request: Request):
                 for k, t in list(clics_procesados.items()):
                     if ahora - t > 5:
                         clics_procesados.pop(k, None)
-            # ---------------------------------------------
             
-            # Clic normal: limpia el botón de forma totalmente silenciosa
             responder_callback_telegram(callback_id, "")
             
             procesar_mensaje_bot(
@@ -93,7 +145,6 @@ async def recibir_webhook(request: Request):
                 callback_data=callback_data
             )
             
-        # 2. Si el usuario envió una FOTO / CAPTURA DE PANTALLA
         elif "message" in data and "photo" in data["message"]:
             message = data["message"]
             chat_id = message["chat"]["id"]
@@ -111,7 +162,6 @@ async def recibir_webhook(request: Request):
                 enviar_foto_callback=enviar_foto_telegram
             )
 
-        # 3. Si el usuario envió un mensaje de texto normal
         elif "message" in data and "text" in data["message"]:
             message = data["message"]
             chat_id = message["chat"]["id"]
@@ -135,13 +185,8 @@ async def recibir_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 def enviar_mensaje_telegram(chat_id, texto, teclado=None):
-    """Envía un mensaje nuevo al chat de Telegram."""
     url = f"{TELEGRAM_API_URL}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": chat_id, "text": texto, "parse_mode": "Markdown"}
     if teclado:
         payload["reply_markup"] = teclado
     try:
@@ -150,14 +195,8 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
         print(f"Error enviando mensaje a Telegram: {e}")
 
 def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
-    """Reenvía una foto (captura de pago) con texto y botones al chat (ej: al Admin)."""
     url = f"{TELEGRAM_API_URL}/sendPhoto"
-    payload = {
-        "chat_id": chat_id,
-        "photo": photo_file_id,
-        "caption": caption,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": chat_id, "photo": photo_file_id, "caption": caption, "parse_mode": "Markdown"}
     if teclado:
         payload["reply_markup"] = teclado
     try:
@@ -166,14 +205,8 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
         print(f"Error enviando foto a Telegram: {e}")
 
 def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
-    """Edita un mensaje existente para una experiencia más fluida."""
     url = f"{TELEGRAM_API_URL}/editMessageText"
-    payload = {
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": texto, "parse_mode": "Markdown"}
     if teclado:
         payload["reply_markup"] = teclado
     try:
@@ -185,7 +218,6 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
         print(f"Error editando mensaje en Telegram: {e}")
 
 def responder_callback_telegram(callback_id, texto_alerta=""):
-    """Responde al callback. Si hay texto, muestra la alerta flotante (para usuarios ansiosos)."""
     url = f"{TELEGRAM_API_URL}/answerCallbackQuery"
     payload = {"callback_query_id": callback_id}
     if texto_alerta:
