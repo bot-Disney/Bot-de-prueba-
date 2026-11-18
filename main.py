@@ -134,9 +134,17 @@ async def recibir_mensaje_whatsapp(request: Request):
     """Recibe mensajes de texto enviados por los clientes a través de WhatsApp y los enruta al cerebro del bot."""
     try:
         body = await request.json()
-        entry = body.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
+        print(f"📥 Webhook de WhatsApp recibido: {body}")
+
+        entry = body.get("entry", [])
+        if not entry:
+            return {"status": "ignored"}
+
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return {"status": "ignored"}
+
+        value = changes[0].get("value", {})
         messages = value.get("messages")
 
         if messages:
@@ -152,6 +160,7 @@ async def recibir_mensaje_whatsapp(request: Request):
 
             if tipo_msg == "text":
                 texto_texto = msg.get("text", {}).get("body", "").strip()
+                print(f"💬 Mensaje de {remitente} ({nombre_cliente}): {texto_texto}")
                 
                 # Enrutamos directamente al cerebro principal del bot unificado
                 procesar_mensaje_bot(
@@ -164,7 +173,7 @@ async def recibir_mensaje_whatsapp(request: Request):
 
         return {"status": "success"}
     except Exception as e:
-        print(f"Error procesando webhook de WhatsApp: {e}")
+        print(f"❌ Error procesando webhook de WhatsApp: {e}")
         return {"status": "error"}
 
 
