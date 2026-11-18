@@ -145,7 +145,7 @@ def existen_cupones_activos():
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión simplificada de pagos y cupones directos desde el menú de cobro."""
+    """Cerebro industrial con gestión simplificada de pagos, cupones y control estricto de expiración de 30 minutos."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -3303,6 +3303,7 @@ def liberar_y_eliminar_fila_suscripcion(row_idx):
 
 
 def aprobar_suscripcion_sheet(row_idx):
+    """Aprueba la suscripción con control estricto de expiración a los 30 min (exclusivo para filas nuevas) y asignación segura."""
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
@@ -3318,39 +3319,56 @@ def aprobar_suscripcion_sheet(row_idx):
         if estado_actual == "activo":
             return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
 
-        tipo_operacion = "Renovación" if timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 else "Pantalla Nueva"
+        # DETERMINAR SI ES RENOVACIÓN O PANTALLA NUEVA
+        # Si la columna Vencimiento tiene una fecha en formato AAAA-MM-DD, significa que es una RENOVACIÓN (nunca se borra por tiempo).
+        es_renovacion = (timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3)
+        tipo_operacion = "Renovación" if es_renovacion else "Pantalla Nueva"
 
-        tiempo_expirado = False
-        if timestamp_orden and not ("-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3):
-            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                try:
-                    hora_orden = datetime.datetime.strptime(timestamp_orden, fmt)
-                    ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
-                    diferencia_minutos = (ahora_local - hora_orden).total_seconds() / 60
-                    if diferencia_minutos > 30:
-                        tiempo_expirado = True
-                    break
-                except ValueError:
-                    continue
-
-        if tiempo_expirado and "pendiente" not in cuenta_fila.lower():
-            correo_verificado = asignar_correo_desde_stock(sheet, servicio_fila, tid_cliente, nombre_cliente)
-            if correo_verificado and "pendiente" not in correo_verificado.lower():
-                cuenta_fila = correo_verificado
-                perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio_fila, cuenta_fila)
-                sheet.update_cell(row_idx, 3, cuenta_fila)
-                sheet.update_cell(row_idx, 4, perfil_asignado)
-            else:
-                if ADMIN_ID:
+        # CONTROL DE TIEMPO (30 MINUTOS) EXCLUSIVO PARA FILAS NUEVAS
+        if not es_renovacion:
+            tiempo_expirado = False
+            if timestamp_orden:
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
                     try:
-                        alerta_tardia_sin_stock = (
-                            f"🚨 *¡ALERTA DE PAGO TARDÍO / STOCK AGOTADO!* 🚨\n\n"
-                            f"• *Cliente:* {nombre_cliente} (`{tid_cliente}`)\n"
-                            f"• *Servicio:* {servicio_fila}\n\n"
-                            "💡 El cliente pagó después de los 30 minutos y ya no hay perfiles libres en stock. Por favor, carga una cuenta nueva y asígnale su acceso manualmente."
-                        )
-                    except Exception:
-                        pass
+                        hora_orden = datetime.datetime.strptime(timestamp_orden, fmt)
+                        ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
+                        diferencia_minutos = (ahora_local - hora_orden).total_seconds() / 60
+                        if diferencia_minutos > 30:
+                            tiempo_expirado = True
+                        break
+                    except ValueError:
+                        continue
+
+            # Si pasaron más de 30 minutos, liberamos la cuenta vieja asignada y buscamos una NUEVA pantalla/cuenta en stock
+            if tiempo_expirado:
+                print(f"⚠️ La orden de la fila {row_idx} superó los 30 minutos. Reasignando pantalla fresca...")
+                
+                # Liberar cuenta previa si tenía una asignada
+                if cuenta_fila and "pendiente" not in cuenta_fila.lower() and "asignar" not in cuenta_fila.lower():
+                    try:
+                        spreadsheet = sheet.spreadsheet
+                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
+                        registros_c = sheet_cuentas.get_all_records()
+                        for idx_c, c_row in enumerate(registros_c, start=2):
+                            if safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", "")).lower() == cuenta_fila.lower():
+                                ocu = int(safe_get(c_row, "Perfiles Ocupados", "1"))
+                                sheet_cuentas.update_cell(idx_c, 5, max(0, ocu - 1))
+                                if safe_get(c_row, "Estado", "").lower() == "llena":
+                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
+                                break
+                    except Exception as e:
+                        print(f"Aviso liberando cuenta expirada de 30 min: {e}")
+
+                # Buscar nuevo correo y perfil disponible de inmediato
+                correo_fresco = asignar_correo_desde_stock(sheet, servicio_fila, tid_cliente, nombre_cliente)
+                if correo_fresco and "pendiente" not in correo_fresco.lower():
+                    cuenta_fila = correo_fresco
+                    perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio_fila, cuenta_fila)
+                    sheet.update_cell(row_idx, 3, cuenta_fila)
+                    sheet.update_cell(row_idx, 4, perfil_asignado)
+                else:
+                    cuenta_fila = "⚠️ Pendiente de Stock"
+                    sheet.update_cell(row_idx, 3, cuenta_fila)
 
         fecha_base = obtener_hora_venezuela().date()
         nueva_fecha = (fecha_base + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
