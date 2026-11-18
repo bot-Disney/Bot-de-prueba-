@@ -131,7 +131,7 @@ def verificar_webhook_whatsapp(request: Request):
 
 @app.post("/webhook/whatsapp")
 async def recibir_mensaje_whatsapp(request: Request):
-    """Recibe mensajes y multimedia enviados por los clientes a través de WhatsApp."""
+    """Recibe mensajes de texto enviados por los clientes a través de WhatsApp y los enruta al cerebro del bot."""
     try:
         body = await request.json()
         entry = body.get("entry", [])[0]
@@ -141,22 +141,36 @@ async def recibir_mensaje_whatsapp(request: Request):
 
         if messages:
             msg = messages[0]
-            remitente = msg.get("from")  # Número de teléfono de WhatsApp del cliente
+            remitente = msg.get("from")  # Número de teléfono de WhatsApp del cliente (Ej: 58424...)
             tipo_msg = msg.get("type")
+
+            # Obtenemos el nombre del contacto si viene en el payload de Meta
+            contacts = value.get("contacts", [])
+            nombre_cliente = "Cliente WhatsApp"
+            if contacts:
+                nombre_cliente = contacts[0].get("profile", {}).get("name", "Cliente WhatsApp")
 
             if tipo_msg == "text":
                 texto_texto = msg.get("text", {}).get("body", "").strip()
                 
-                # Respuesta de prueba temporal para validar la conexión
-                enviar_mensaje_whatsapp(
-                    remitente, 
-                    f"¡Hola! Recibí tu mensaje por WhatsApp: '{texto_texto}'. Pronto estará sincronizado con el bot principal."
+                # Enrutamos directamente al cerebro principal del bot unificado
+                procesar_mensaje_bot(
+                    chat_id=remitente,
+                    texto=texto_texto,
+                    nombre=nombre_cliente,
+                    username="",
+                    enviar_mensaje_callback=enviar_mensaje_whatsapp_wrapper,
                 )
 
         return {"status": "success"}
     except Exception as e:
         print(f"Error procesando webhook de WhatsApp: {e}")
         return {"status": "error"}
+
+
+def enviar_mensaje_whatsapp_wrapper(chat_id, texto, teclado=None):
+    """Función puente para adaptar el envío de mensajes de texto hacia WhatsApp."""
+    enviar_mensaje_whatsapp(chat_id, texto)
 
 
 # =============================================================
