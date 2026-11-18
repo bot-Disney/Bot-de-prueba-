@@ -1,151 +1,58 @@
 import os
-import time
-import datetime
-import requests
-import threading
-from sheets_db import conectar_sheets
-from gmail_otp import obtener_ultimo_codigo_disney, obtener_ultimo_codigo_netflix
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    ZoneInfo = None
-
-# =============================================================
-# CONTROL DE CONCURRENCIA (THREADS LOCK)
-# =============================================================
-candado_operaciones = threading.Lock()
-
-WHATSAPP_NUMERO = "584247091547"
-ADMIN_ID = str(os.getenv("ADMIN_TELEGRAM_ID", "")).strip()
-
-# =============================================================
-# CONFIGURACIÓN DE HORA LOCAL (VENEZUELA / UTC-4)
-# =============================================================
-def obtener_hora_venezuela():
-    """Retorna la fecha y hora actual ajustada estrictamente a la zona horaria de Venezuela (UTC-4)."""
-    if ZoneInfo:
-        try:
-            return datetime.datetime.now(ZoneInfo("America/Caracas"))
-        except Exception:
-            pass
-    return datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=4)
-
-# =============================================================
-# CONFIGURACIÓN DE PRECIOS (USD/USDT) Y DATOS DE PAGO MÓVIL
-# =============================================================
-PRECIO_DISNEY_USD = 5.0   # Precio en USD de Disney+
-PRECIO_NETFLIX_USD = 4.5  # Precio en USD de Netflix
-TASA_RESPALDO_BS = 1100.0   # Tasa de respaldo por si fallan las consultas externas
-
-PAGO_MOVIL_BANCO = "Provincial (0108)"
-PAGO_MOVIL_CEDULA = "27538779"
-PAGO_MOVIL_TELEFONO = "04247091547"
-
-control_intentos_otp = {}
-MAX_INTENTOS_RAPIDOS = 2
-COOLDOWN_SEGUNDOS = 180
-
-# Control de estados temporales, asistentes y memoria temporal de pagos/cupones/difusión
-esperando_captura_pago = {}
-esperando_nuevo_nombre_perfil = {}
-esperando_busqueda_admin = {}
-asistente_cuenta_datos = {}
-asistente_edicion_admin = {}
-asistente_cupon_admin = {}
-esperando_codigo_cupon_cliente = {} 
-detalles_pago_activos = {} 
-asistente_difusion_admin = {} 
-registros_pendientes_info = {} 
-
-
-def safe_get(row_dict, key, default=""):
-    """Lee de manera segura un diccionario de Google Sheets ignorando espacios y mayúsculas en los encabezados."""
-    if not isinstance(row_dict, dict):
-        return default
-    for k, v in row_dict.items():
-        if str(k).strip().lower() == str(key).strip().lower():
-            val = str(v).strip()
-            return val if val != "" else default
-    return default
-
-
-def obtener_tasa_usdt_hoy():
-    """Consulta la tasa USDT/VES del día (Binance P2P con respaldo automático) sin bloquear el bot."""
-    try:
-        url_binance = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-        payload = {
-            "asset": "USDT",
-            "fiat": "VES",
-            "merchantCheck": False,
-            "page": 1,
-            "payTypes": [],
-            "publisherType": None,
-            "rows": 5,
-            "tradeType": "BUY"
-        }
-        res = requests.post(url_binance, json=payload, timeout=4)
-        if res.status_code == 200:
-            anuncios = res.json().get("data", [])
-            precios = [float(a["adv"]["price"]) for a in anuncios if "adv" in a and "price" in a["adv"]]
-            if precios:
-                return round(sum(precios) / len(precios), 2)
-    except Exception as e:
-        print(f"Aviso: No se pudo leer Binance P2P ({e}), probando respaldo...")
-
-    try:
-        res_alt = requests.get("https://pydolarve.org/api/v1/dollar?monitor=enparalelovzla", timeout=3)
-        if res_alt.status_code == 200:
-            precio = res_alt.json().get("price")
-            if precio:
-                return round(float(precio), 2)
-    except Exception:
-        pass
-
-    return TASA_RESPALDO_BS
-
-
-def existen_cupones_activos():
-    """Verifica si hay al menos un cupón activo y vigente en Google Sheets."""
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        sheet_cupones = spreadsheet.worksheet("Cupones")
-        registros = sheet_cupones.get_all_records()
-        
-        ahora = obtener_hora_venezuela().replace(tzinfo=None)
-        for row in registros:
-            estado = safe_get(row, "Estado", "Activo").lower()
-            if estado == "activo":
-                fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
-                duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
-                
-                expirado = False
-                if fecha_creacion_str and duracion_horas_str.isdigit():
-                    duracion_horas = int(duracion_horas_str)
-                    if duracion_horas > 0:
-                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                            try:
-                                fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
-                                if ahora > (fecha_creacion + datetime.timedelta(hours=duracion_horas)):
-                                    expirado = True
-                                break
-                            except ValueError:
-                                continue
-                if expirado:
-                    continue
-                
-                usos_max = int(safe_get(row, "Usos Maximos", "999999"))
-                veces_usado = int(safe_get(row, "Veces Usado", "0"))
-                if veces_usado < usos_max:
-                    return True
-        return False
-    except Exception:
-        return False
+from config_y_estado import (
+    ADMIN_ID,
+    esperando_captura_pago,
+    esperando_nuevo_nombre_perfil,
+    esperando_busqueda_admin,
+    asistente_cuenta_datos,
+    asistente_edicion_admin,
+    asistente_cupon_admin,
+    esperando_codigo_cupon_cliente,
+    detalles_pago_activos,
+    asistente_difusion_admin,
+    registros_pendientes_info,
+    safe_get,
+    obtener_hora_venezuela
+)
+from teclados import get_main_menu_keyboard, get_datos_keyboard, get_back_keyboard, quitar_botones_telegram
+from servicios_sheets import (
+    conectar_sheets,
+    existen_cupones_activos,
+    validar_y_consumir_cupon,
+    guardar_nuevo_cupon_sheet,
+    obtener_pin_asignado_cliente,
+    limpiar_fila_cancelada_o_renovacion,
+    rechazar_pago_seguro,
+    asignar_correo_desde_stock,
+    procesar_asignacion_stock_masivo,
+    obtener_suscripciones_por_id,
+    crear_nueva_fila_pendiente,
+    verificar_cliente_activo,
+    obtener_clientes_pendientes,
+    obtener_clientes_activos_general,
+    obtener_suscripciones_vencidas,
+    liberar_y_eliminar_fila_suscripcion,
+    aprobar_suscripcion_sheet,
+    registrar_venta_en_historial,
+    verificar_alerta_vencimiento,
+    generar_reporte_admin,
+    generar_resumen_completo_negocio
+)
+from flujo_cliente import (
+    ejecutar_busqueda_otp,
+    registrar_intento_sospechoso_otp,
+    iniciar_proceso_pago_con_descuento,
+    notificar_pago_efectivo,
+    procesar_texto_reporte
+)
+from flujo_admin import (
+    enviar_difusion_masiva,
+    verificar_y_notificar_vencimientos_admin
+)
 
 
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
-    """Cerebro industrial con gestión simplificada de pagos, cupones y control estricto de expiración de 30 minutos."""
+    """Cerebro enrutador industrial conectado con los submódulos de la arquitectura limpia."""
     
     str_chat_id = str(chat_id).strip()
     accion = callback_data if es_callback else texto.lower().strip()
@@ -363,7 +270,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # CLIENTE: VALIDACIÓN DE CÓDIGO DE CUPÓN ESCRITO (DIRECTO DESDE PAGO)
+    # CLIENTE: VALIDACIÓN DE CÓDIGO DE CUPÓN ESCRITO
     # -------------------------------------------------------------
     if not es_callback and str_chat_id in esperando_codigo_cupon_cliente and texto:
         datos_pago_temp = esperando_codigo_cupon_cliente.pop(str_chat_id)
@@ -466,6 +373,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sesion_c["duracion_horas"] = horas
                 sesion_c["usos_maximos"] = 999999
                 guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_mensaje_callback)
+                asistente_cupon_admin.pop(str_chat_id, None)
             except ValueError:
                 enviar_mensaje_callback(chat_id, "⚠️ Ingresa un número entero de horas válido (Ej: `3`):")
             return
@@ -476,6 +384,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sesion_c["usos_maximos"] = usos
                 sesion_c["duracion_horas"] = 0
                 guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_mensaje_callback)
+                asistente_cupon_admin.pop(str_chat_id, None)
             except ValueError:
                 enviar_mensaje_callback(chat_id, "⚠️ Ingresa un número entero de usos válido (Ej: `20`):")
             return
@@ -819,25 +728,12 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # CANCELAR Y VOLVER AL MENÚ
     # -------------------------------------------------------------
     if accion == "menu_principal" or accion == "/start" or accion == "/menu":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
-        if str_chat_id in esperando_nuevo_nombre_perfil:
-            esperando_nuevo_nombre_perfil.pop(str_chat_id)
-        if str_chat_id in esperando_busqueda_admin:
-            esperando_busqueda_admin.pop(str_chat_id)
-        if str_chat_id in asistente_cuenta_datos:
-            asistente_cuenta_datos.pop(str_chat_id)
-        if str_chat_id in asistente_edicion_admin:
-            asistente_edicion_admin.pop(str_chat_id)
-        if str_chat_id in asistente_cupon_admin:
-            asistente_cupon_admin.pop(str_chat_id)
-        if str_chat_id in esperando_codigo_cupon_cliente:
-            esperando_codigo_cupon_cliente.pop(str_chat_id)
-        if str_chat_id in detalles_pago_activos:
-            detalles_pago_activos.pop(str_chat_id)
-        if str_chat_id in asistente_difusion_admin:
-            asistente_difusion_admin.pop(str_chat_id)
+        for diccionario in [
+            esperando_captura_pago, esperando_nuevo_nombre_perfil, esperando_busqueda_admin,
+            asistente_cuenta_datos, asistente_edicion_admin, asistente_cupon_admin,
+            esperando_codigo_cupon_cliente, detalles_pago_activos, asistente_difusion_admin
+        ]:
+            diccionario.pop(str_chat_id, None)
             
         texto_menu = (
             "🤖 *Bienvenido al servicio de Streaming*\n\n"
@@ -910,7 +806,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
     if not es_callback and str_chat_id in esperando_captura_pago and texto and texto.lower().strip() not in ("efectivo", "/efectivo"):
         row_idx_pendiente = esperando_captura_pago.pop(str_chat_id)
-        procesar_texto_reporte(chat_id, texto, nombre, username, enviar_mensaje_callback, str_chat_id, row_idx_pendiente, enviar_foto_callback)
+        procesar_texto_reporte(chat_id, texto, nombre, username, enviar_mensaje_callback, str_chat_id, row_idx_pendiente, enviar_foto_callback, ADMIN_ID)
         return
 
     # -------------------------------------------------------------
@@ -931,6 +827,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             cta = safe_get(sub, "Cuenta", "Cuenta")
             botones_selector.append([{"text": f"🔄 Renovar {srv} - {pnt} ({cta})", "callback_data": f"efectivo_fila_{r_idx}"}])
 
+        from config_y_estado import PRECIO_DISNEY_USD, PRECIO_NETFLIX_USD
         botones_selector.append([{"text": f"➕ Nueva Pantalla Disney+ (${PRECIO_DISNEY_USD:.2f})", "callback_data": "efectivo_nuevo_disney"}])
         botones_selector.append([{"text": f"➕ Nueva Pantalla Netflix (${PRECIO_NETFLIX_USD:.2f})", "callback_data": "efectivo_nuevo_netflix"}])
         botones_selector.append([{"text": "🔙 Cancelar y Volver", "callback_data": "menu_principal"}])
@@ -945,7 +842,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion.startswith("efectivo_fila_"):
         try:
             row_idx_elegido = int(accion.split("_")[-1])
-            notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_elegido, "Renovación", enviar_mensaje_callback, editar_mensaje_callback, message_id, es_callback)
+            notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_elegido, "Renovación", enviar_mensaje_callback, editar_mensaje_callback, message_id, es_callback, ADMIN_ID)
         except Exception as e:
             print(f"Error en efectivo fila: {e}")
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
@@ -956,33 +853,22 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             servicio_elegido = "Netflix" if "netflix" in accion else "Disney+"
             nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
             esperando_captura_pago[str_chat_id] = nueva_fila_idx
-            notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, nueva_fila_idx, "Pantalla Nueva", enviar_mensaje_callback, editar_mensaje_callback, message_id, es_callback)
+            notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, nueva_fila_idx, "Pantalla Nueva", enviar_mensaje_callback, editar_mensaje_callback, message_id, es_callback, ADMIN_ID)
         except Exception as e:
             print(f"Error en efectivo nuevo: {e}")
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
         return
 
     # -------------------------------------------------------------
-    # PANEL DE ADMINISTRADOR Y GESTIÓN DE CUENTAS / CUPONES / CRM
+    # PANEL DE ADMINISTRADOR Y GESTIÓN GENERAL
     # -------------------------------------------------------------
     if accion == "/admin" or accion == "admin_volver":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
-        if str_chat_id in esperando_busqueda_admin:
-            esperando_busqueda_admin.pop(str_chat_id)
-        if str_chat_id in asistente_cuenta_datos:
-            asistente_cuenta_datos.pop(str_chat_id)
-        if str_chat_id in asistente_edicion_admin:
-            asistente_edicion_admin.pop(str_chat_id)
-        if str_chat_id in asistente_cupon_admin:
-            asistente_cupon_admin.pop(str_chat_id)
-        if str_chat_id in esperando_codigo_cupon_cliente:
-            esperando_codigo_cupon_cliente.pop(str_chat_id)
-        if str_chat_id in detalles_pago_activos:
-            detalles_pago_activos.pop(str_chat_id)
-        if str_chat_id in asistente_difusion_admin:
-            asistente_difusion_admin.pop(str_chat_id)
+        for diccionario in [
+            esperando_captura_pago, esperando_busqueda_admin, asistente_cuenta_datos,
+            asistente_edicion_admin, asistente_cupon_admin, esperando_codigo_cupon_cliente,
+            detalles_pago_activos, asistente_difusion_admin
+        ]:
+            diccionario.pop(str_chat_id, None)
 
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             reporte = generar_reporte_admin()
@@ -1008,13 +894,11 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # CENTRO DE MENSAJERÍA Y DIFUSIÓN REORGANIZADO (CRM)
+    # CRM & MENSAJERÍA ADMIN
     # -------------------------------------------------------------
     elif accion == "admin_mensajeria":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
-            if str_chat_id in asistente_difusion_admin:
-                asistente_difusion_admin.pop(str_chat_id)
-
+            asistente_difusion_admin.pop(str_chat_id, None)
             texto_msg = (
                 "📢 *CENTRO DE MENSAJERÍA Y COMUNICACIÓN (CRM)*\n\n"
                 "¿Qué tipo de gestión de mensajes deseas realizar?"
@@ -1075,11 +959,11 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             tipo = accion.split("_")[-1]
             asistente_difusion_admin[str_chat_id] = {"alcance": "global", "tipo": tipo}
 
-            if tipo == "cupon":
-                instruccion = "🎟️ *DIFUSIÓN GLOBAL: CUPÓN*\n\nEscribe únicamente el **código del cupón** (Ej: `VIP2026`) que deseas enviar a todos:"
-            else:
-                instruccion = "✨ *DIFUSIÓN GLOBAL: NOVEDAD*\n\nEscribe el **texto del anuncio** que deseas enviar masivamente:"
-
+            instruccion = (
+                "🎟️ *DIFUSIÓN GLOBAL: CUPÓN*\n\nEscribe únicamente el **código del cupón** (Ej: `VIP2026`):"
+                if tipo == "cupon" else
+                "✨ *DIFUSIÓN GLOBAL: NOVEDAD*\n\nEscribe el **texto del anuncio** que deseas enviar masivamente:"
+            )
             teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_alcance_global"}]]}
             if es_callback and editar_mensaje_callback:
                 editar_mensaje_callback(chat_id, message_id, instruccion, teclado_canc)
@@ -1092,17 +976,11 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             tipo = accion.split("_")[-1]
             asistente_difusion_admin[str_chat_id] = {"alcance": "individual", "tipo": tipo}
 
-            if tipo == "sospechoso":
-                instruccion = (
-                    "⚠️ *AVISO A USUARIO SOSPECHOSO*\n\n"
-                    "Escribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente que deseas buscar para enviarle el aviso:"
-                )
-            else:
-                instruccion = (
-                    "💬 *MENSAJE DIRECTO A USUARIO*\n\n"
-                    "Escribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente que deseas buscar:"
-                )
-
+            instruccion = (
+                "⚠️ *AVISO A USUARIO SOSPECHOSO*\n\nEscribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente:"
+                if tipo == "sospechoso" else
+                "💬 *MENSAJE DIRECTO A USUARIO*\n\nEscribe el **nombre**, **usuario (@)**, **ID** o **correo** del cliente:"
+            )
             teclado_canc = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_alcance_individual"}]]}
             if es_callback and editar_mensaje_callback:
                 editar_mensaje_callback(chat_id, message_id, instruccion, teclado_canc)
@@ -1112,12 +990,10 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
     elif accion == "admin_gestionar_cupones":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
-            if str_chat_id in asistente_cupon_admin:
-                asistente_cupon_admin.pop(str_chat_id)
-                
+            asistente_cupon_admin.pop(str_chat_id, None)
             texto_gc = (
                 "🎟️ *GESTIÓN DE CUPONES DE DESCUENTO*\n\n"
-                "Aquí puedes crear nuevos códigos promocionales o ver y administrar los cupones existentes:"
+                "Aquí puedes crear nuevos códigos promocionales o administrar los existentes:"
             )
             teclado_gc = {
                 "inline_keyboard": [
@@ -1199,7 +1075,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_principal = conectar_sheets()
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cupones = spreadsheet.worksheet("Cupones")
-                
                 sheet_cupones.delete_rows(row_idx_cupon)
                 
                 texto_editado = "🗑️ *Cupón eliminado exitosamente de la base de datos.*"
@@ -1257,16 +1132,14 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # GESTIÓN Y CREACIÓN DE CUENTAS MAESTRAS (STOCK)
+    # GESTIÓN DE CUENTAS MAESTRAS (STOCK)
     # -------------------------------------------------------------
     elif accion == "admin_gestionar_cuentas":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
-            if str_chat_id in asistente_cuenta_datos:
-                asistente_cuenta_datos.pop(str_chat_id)
-                
+            asistente_cuenta_datos.pop(str_chat_id, None)
             texto_gcta = (
                 "🔑 *GESTIÓN DE CUENTAS MAESTRAS (STOCK)*\n\n"
-                "Aquí puedes cargar nuevas cuentas con sus PINs o ver y administrar las existentes en tu inventario:"
+                "Aquí puedes cargar nuevas cuentas con sus PINs o ver las existentes en tu inventario:"
             )
             teclado_gcta = {
                 "inline_keyboard": [
@@ -1344,7 +1217,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 sheet_principal = conectar_sheets()
                 spreadsheet = sheet_principal.spreadsheet
                 sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                
                 sheet_cuentas.delete_rows(row_idx_cuenta)
                 
                 texto_editado = "🗑️ *Cuenta maestra eliminada exitosamente del inventario.*"
@@ -1364,7 +1236,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
     elif accion == "admin_cargar_cuenta":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
-            mensaje_carga = "➕ *CARGAR NUEVA CUENTA Y PINS*\n\nSelecciona a qué plataforma pertenece la cuenta que deseas agregar:"
+            mensaje_carga = "➕ *CARGAR NUEVA CUENTA Y PINS*\n\nSelecciona a qué plataforma pertenece la cuenta:"
             teclado_servicios = {
                 "inline_keyboard": [
                     [{"text": "📺 Netflix (5 Perfiles)", "callback_data": "admin_cuenta_netflix"}],
@@ -1404,346 +1276,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # REGISTRO MANUAL (ADMIN SELECCIONA CUENTA Y PERFIL)
+    # APROBACIONES, PENDIENTES Y EXPULSIONES ADMIN
     # -------------------------------------------------------------
-    elif accion.startswith("admin_reg_cuenta_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                partes = accion.split("_")
-                tid_target = str(partes[3]).strip()
-                idx_cuenta_sheet = int(partes[4])
-
-                sheet_principal = conectar_sheets()
-                spreadsheet = sheet_principal.spreadsheet
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-
-                fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
-                correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
-                srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
-
-                nombre_cliente_preview = registros_pendientes_info.get(tid_target, f"Usuario ID {tid_target}")
-
-                limite_max = 5 if "netflix" in srv_sel.lower() else 7
-                registros_clientes = sheet_principal.get_all_records()
-
-                perfiles_ocupados = set()
-                for r in registros_clientes:
-                    cta = safe_get(r, "Cuenta", "").lower()
-                    pnt = safe_get(r, "Pantalla", "").lower()
-                    if cta == correo_sel.lower():
-                        for n in range(1, limite_max + 1):
-                            if f"perfil {n}" in pnt:
-                                perfiles_ocupados.add(n)
-
-                botones_perfiles_reg = []
-                for n in range(1, limite_max + 1):
-                    if n not in perfiles_ocupados:
-                        nombre_p = f"Perfil {n}"
-                        botones_perfiles_reg.append([{
-                            "text": f"📺 Asignar {nombre_p}",
-                            "callback_data": f"admin_reg_perfil_{tid_target}_{idx_cuenta_sheet}_{n}"
-                        }])
-
-                botones_perfiles_reg.append([{"text": "🔙 Cancelar", "callback_data": "admin_volver"}])
-
-                texto_sel_p = (
-                    f"👤 *SELECCIONAR PERFIL PARA REGISTRO*\n\n"
-                    f"• *Cliente:* {nombre_cliente_preview}\n"
-                    f"• *Telegram ID Target:* `{tid_target}`\n"
-                    f"• *Correo:* `{correo_sel}`\n\n"
-                    "Selecciona el perfil que le vas a entregar:"
-                )
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_sel_p, {"inline_keyboard": botones_perfiles_reg})
-                else:
-                    enviar_mensaje_callback(chat_id, texto_sel_p, {"inline_keyboard": botones_perfiles_reg})
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error seleccionando cuenta: {e}", get_back_keyboard())
-        return
-
-    elif accion.startswith("admin_reg_perfil_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                partes = accion.split("_")
-                tid_target = str(partes[3]).strip()
-                idx_cuenta_sheet = int(partes[4])
-                num_perfil = int(partes[5])
-
-                sheet_principal = conectar_sheets()
-                spreadsheet = sheet_principal.spreadsheet
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
-                
-                correo_sel = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
-                srv_sel = fila_cuenta[0] if len(fila_cuenta) > 0 else "Netflix"
-                nombre_cliente_preview = registros_pendientes_info.get(tid_target, f"Usuario ID {tid_target}")
-
-                asistente_edicion_admin[str_chat_id] = {
-                    "paso": "esperando_fecha_registro_manual",
-                    "tid_target": tid_target,
-                    "correo": correo_sel,
-                    "servicio": srv_sel,
-                    "perfil": f"Perfil {num_perfil}"
-                }
-
-                texto_pedir_fecha = (
-                    "📅 *FECHA DE VENCIMIENTO*\n\n"
-                    f"• *Cliente:* {nombre_cliente_preview}\n"
-                    f"• *Cliente ID:* `{tid_target}`\n"
-                    f"• *Cuenta:* `{correo_sel}`\n"
-                    f"• *Perfil:* `Perfil {num_perfil}`\n\n"
-                    "Escribe la **fecha de vencimiento** en formato `AAAA-MM-DD` (Ej: `2026-12-31`):"
-                )
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_pedir_fecha, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]})
-                else:
-                    enviar_mensaje_callback(chat_id, texto_pedir_fecha, {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": "admin_volver"}]]})
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error procesando perfil: {e}", get_back_keyboard())
-        return
-
-    # -------------------------------------------------------------
-    # EDICIÓN DE CLIENTES / EDICIÓN MANUAL
-    # -------------------------------------------------------------
-    elif accion.startswith("admin_edit_menu_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                row_idx = int(accion.split("_")[-1])
-                sheet = conectar_sheets()
-                registros = sheet.get_all_records()
-                fila = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
-
-                nombre_c = safe_get(fila, "Nombre", "Cliente")
-                srv_c = safe_get(fila, "Servicio", "Disney+")
-                cta_c = safe_get(fila, "Cuenta", "Correo")
-                pnt_c = safe_get(fila, "Pantalla", "Perfil 1")
-                fec_c = safe_get(fila, "Vencimiento", "N/A")
-
-                texto_edit = (
-                    f"✏️ *MODO EDICIÓN MANUAL* (Fila {row_idx})\n\n"
-                    f"• *Cliente:* {nombre_c}\n"
-                    f"• *Servicio:* {srv_c}\n"
-                    f"• *Correo actual:* `{cta_c}`\n"
-                    f"• *Perfil actual:* {pnt_c}\n"
-                    f"• *Vencimiento:* `{fec_c}`\n\n"
-                    "Selecciona qué dato deseas modificar:"
-                )
-                teclado_edicion = {
-                    "inline_keyboard": [
-                        [{"text": "🔄 Cambiar de Correo / Cuenta", "callback_data": f"admin_cambiar_correo_{row_idx}"}],
-                        [{"text": "📅 Modificar Fecha de Vencimiento", "callback_data": f"admin_cambiar_fecha_{row_idx}"}],
-                        [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
-                    ]
-                }
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_edit, teclado_edicion)
-                else:
-                    enviar_mensaje_callback(chat_id, texto_edit, teclado_edicion)
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error al cargar menú de edición: {e}", get_back_keyboard())
-        return
-
-    elif accion.startswith("admin_cambiar_correo_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                row_idx = int(accion.split("_")[-1])
-                sheet_principal = conectar_sheets()
-                spreadsheet = sheet_principal.spreadsheet
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                registros_cuentas = sheet_cuentas.get_all_records()
-
-                registros_clientes = sheet_principal.get_all_records()
-                fila_actual = registros_clientes[row_idx - 2] if (row_idx - 2) < len(registros_clientes) else {}
-                srv_cliente = safe_get(fila_actual, "Servicio", "Disney+").lower()
-
-                botones_cuentas = []
-                for idx_c, c in enumerate(registros_cuentas, start=2):
-                    srv_c = safe_get(c, "Servicio", "").lower()
-                    est_c = safe_get(c, "Estado", "").lower()
-                    correo_c = safe_get(c, "Correo (Usuario)", safe_get(c, "Correo", ""))
-
-                    if srv_cliente in srv_c and est_c == "activa":
-                        try:
-                            limite = 5 if "netflix" in srv_c else 7
-                            cap = int(safe_get(c, "Capacidad Total", str(limite)))
-                            ocu = int(safe_get(c, "Perfiles Ocupados", "0"))
-                        except ValueError:
-                            cap, ocu = 5, 0
-
-                        if ocu < cap:
-                            botones_cuentas.append([{
-                                "text": f"📧 {correo_c} ({ocu}/{cap} ocupados)",
-                                "callback_data": f"admin_selcuenta_{row_idx}_{idx_c}"
-                            }])
-
-                botones_cuentas.append([{"text": "🔙 Volver", "callback_data": f"admin_edit_menu_{row_idx}"}])
-
-                texto_sel = (
-                    "📧 *SELECCIONAR NUEVO CORREO*\n\n"
-                    "Elige la cuenta maestra de destino a la cual deseas mover este cliente:"
-                )
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_sel, {"inline_keyboard": botones_cuentas})
-                else:
-                    enviar_mensaje_callback(chat_id, texto_sel, {"inline_keyboard": botones_cuentas})
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error listando cuentas: {e}", get_back_keyboard())
-        return
-
-    elif accion.startswith("admin_selcuenta_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                partes = accion.split("_")
-                row_idx = int(partes[2])
-                idx_cuenta_sheet = int(partes[3])
-
-                sheet_principal = conectar_sheets()
-                spreadsheet = sheet_principal.spreadsheet
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-
-                fila_cuenta = sheet_cuentas.row_values(idx_cuenta_sheet)
-                correo_nuevo = fila_cuenta[1] if len(fila_cuenta) > 1 else ""
-                srv_cuenta = fila_cuenta[0] if len(fila_cuenta) > 0 else "Disney+"
-                pins_texto = fila_cuenta[6] if len(fila_cuenta) > 6 else ""
-
-                limite_max = 5 if "netflix" in srv_cuenta.lower() else 7
-                registros_clientes = sheet_principal.get_all_records()
-
-                perfiles_ocupados = set()
-                for r in registros_clientes:
-                    cta = safe_get(r, "Cuenta", "").lower()
-                    pnt = safe_get(r, "Pantalla", "").lower()
-                    if cta == correo_nuevo.lower():
-                        for n in range(1, limite_max + 1):
-                            if f"perfil {n}" in pnt:
-                                perfiles_ocupados.add(n)
-
-                botones_perfiles = []
-                pins_dict = {}
-                for parte in pins_texto.split("|"):
-                    if ":" in parte:
-                        k, v = parte.split(":", 1)
-                        pins_dict[k.strip().lower()] = v.strip()
-
-                for n in range(1, limite_max + 1):
-                    if n not in perfiles_ocupados:
-                        nombre_p = f"Perfil {n}"
-                        pin_p = pins_dict.get(nombre_p.lower(), "S/PIN")
-                        botones_perfiles.append([{
-                            "text": f"📺 {nombre_p} (PIN: {pin_p})",
-                            "callback_data": f"admin_aplicar_cambio_{row_idx}_{idx_cuenta_sheet}_{n}"
-                        }])
-
-                botones_perfiles.append([{"text": "🔙 Volver", "callback_data": f"admin_cambiar_correo_{row_idx}"}])
-
-                texto_p = (
-                    f"👤 *SELECCIONAR PERFIL LIBRE*\n\n"
-                    f"Cuenta: `{correo_nuevo}`\n\n"
-                    "Selecciona el perfil disponible que se le asignará al cliente (con su PIN respectivo):"
-                )
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_p, {"inline_keyboard": botones_perfiles})
-                else:
-                    enviar_mensaje_callback(chat_id, texto_p, {"inline_keyboard": botones_perfiles})
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error listando perfiles: {e}", get_back_keyboard())
-        return
-
-    elif accion.startswith("admin_aplicar_cambio_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                partes = accion.split("_")
-                row_idx = int(partes[3])
-                idx_cuenta_sheet = int(partes[4])
-                num_perfil = int(partes[5])
-
-                sheet_principal = conectar_sheets()
-                spreadsheet = sheet_principal.spreadsheet
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-
-                registros_clientes = sheet_principal.get_all_records()
-                fila_anterior = registros_clientes[row_idx - 2] if (row_idx - 2) < len(registros_clientes) else {}
-                correo_viejo = safe_get(fila_anterior, "Cuenta", "")
-                tid_cliente = safe_get(fila_anterior, "Telegram_ID", "")
-                srv_cliente = safe_get(fila_anterior, "Servicio", "Disney+")
-
-                if correo_viejo and "pendiente" not in correo_viejo.lower():
-                    registros_c = sheet_cuentas.get_all_records()
-                    for idx_c, c_row in enumerate(registros_c, start=2):
-                        if safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", "")).lower() == correo_viejo.lower():
-                            ocu_v = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                            nuevos_ocu_v = max(0, ocu_v - 1)
-                            sheet_cuentas.update_cell(idx_c, 5, nuevos_ocu_v)
-                            if safe_get(c_row, "Estado", "").lower() == "llena":
-                                sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                            break
-
-                fila_cuenta_nueva = sheet_cuentas.row_values(idx_cuenta_sheet)
-                correo_nuevo = fila_cuenta_nueva[1] if len(fila_cuenta_nueva) > 1 else ""
-                
-                ocu_n = int(fila_cuenta_nueva[4]) if len(fila_cuenta_nueva) > 4 and fila_cuenta_nueva[4].isdigit() else 0
-                nuevos_ocu_n = ocu_n + 1
-                sheet_cuentas.update_cell(idx_cuenta_sheet, 5, nuevos_ocu_n)
-                
-                cap_n = int(fila_cuenta_nueva[3]) if len(fila_cuenta_nueva) > 3 and fila_cuenta_nueva[3].isdigit() else 5
-                if nuevos_ocu_n >= cap_n:
-                    sheet_cuentas.update_cell(idx_cuenta_sheet, 6, "Llena")
-
-                nuevo_perfil_str = f"Perfil {num_perfil}"
-                sheet_principal.update_cell(row_idx, 3, correo_nuevo)
-                sheet_principal.update_cell(row_idx, 4, nuevo_perfil_str)
-
-                pin_nuevo = obtener_pin_asignado_cliente(correo_nuevo, nuevo_perfil_str)
-
-                texto_exito = (
-                    "✅ *¡CAMBIO DE CUENTA Y PERFIL APLICADO CON ÉXITO!*\n\n"
-                    f"• *Nuevo Correo:* `{correo_nuevo}`\n"
-                    f"• *Nuevo Perfil:* {nuevo_perfil_str}\n"
-                    f"• *PIN Asignado:* `{pin_nuevo}`"
-                )
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_exito, {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]})
-                else:
-                    enviar_mensaje_callback(chat_id, texto_exito, {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]})
-
-                if tid_cliente:
-                    try:
-                        msg_cli = (
-                            "🔄 *¡ACTUALIZACIÓN DE TUS DATOS DE ACCESO!*\n\n"
-                            f"Tu cuenta de *{srv_cliente}* ha sido actualizada por administración:\n\n"
-                            f"• *Nuevo Correo:* `{correo_nuevo}`\n"
-                            f"• *Perfil:* `{nuevo_perfil_str}`\n"
-                            f"• *PIN de seguridad:* `{pin_nuevo}` 🔒\n\n"
-                            "Ingresa al bot y presiona **📲 Ver mis datos** para verificar."
-                        )
-                        enviar_mensaje_callback(int(tid_cliente), msg_cli, get_main_menu_keyboard())
-                    except Exception:
-                        pass
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error al aplicar cambio: {e}", get_back_keyboard())
-        return
-
-    elif accion.startswith("admin_cambiar_fecha_"):
-        if ADMIN_ID and str_chat_id == ADMIN_ID:
-            try:
-                row_idx = int(accion.split("_")[-1])
-                asistente_edicion_admin[str_chat_id] = {
-                    "paso": "esperando_nueva_fecha",
-                    "row_idx": row_idx
-                }
-                texto_f = (
-                    "📅 *MODIFICAR FECHA DE VENCIMIENTO*\n\n"
-                    "Escribe a continuación la nueva fecha en formato `AAAA-MM-DD` (Ej: `2026-12-31`):"
-                )
-                teclado_c = {"inline_keyboard": [[{"text": "🔙 Cancelar", "callback_data": f"admin_edit_menu_{row_idx}"}]]}
-                if es_callback and editar_mensaje_callback:
-                    editar_mensaje_callback(chat_id, message_id, texto_f, teclado_c)
-                else:
-                    enviar_mensaje_callback(chat_id, texto_f, teclado_c)
-            except Exception as e:
-                enviar_mensaje_callback(chat_id, f"❌ Error: {e}", get_back_keyboard())
-        return
-
     elif accion == "admin_resumen_negocio":
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             resumen_detallado = generar_resumen_completo_negocio()
@@ -1761,7 +1295,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             esperando_busqueda_admin[str_chat_id] = True
             mensaje_busqueda = (
                 "🔍 *BUSCAR CLIENTE ACTIVO*\n\n"
-                "Escribe a continuación el **nombre**, **usuario (@)**, **ID de Telegram** o **correo** del cliente que deseas buscar:"
+                "Escribe a continuación el **nombre**, **usuario (@)**, **ID de Telegram** o **correo**:"
             )
             teclado_canc = {
                 "inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": "admin_volver"}]]
@@ -1811,7 +1345,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
                 row_idx_expulsar = int(accion.split("_")[-1])
-                
                 sheet_principal = conectar_sheets()
                 registros = sheet_principal.get_all_records()
                 fila_obj = registros[row_idx_expulsar - 2] if (row_idx_expulsar - 2) < len(registros) else {}
@@ -1901,6 +1434,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 if ya_estaba_activa:
                     texto_res = f"ℹ️ La suscripción de la fila {row_idx} ya había sido aprobada previamente."
                 elif exito:
+                    from config_y_estado import PRECIO_NETFLIX_USD, PRECIO_DISNEY_USD
                     monto_venta = PRECIO_NETFLIX_USD if "netflix" in str(srv_aprobado).lower() else PRECIO_DISNEY_USD
                     registrar_venta_en_historial(
                         nombre_cliente, tid_cliente, srv_aprobado, perfil_asignado,
@@ -1982,7 +1516,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         if ADMIN_ID and str_chat_id == ADMIN_ID:
             try:
                 row_idx = int(accion.split("_")[1])
-                
                 sheet_principal = conectar_sheets()
                 registros = sheet_principal.get_all_records()
                 fila_obj = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
@@ -2007,7 +1540,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         msg_rechazo = (
                             "⚠️ *COMPROBANTE RECHAZADO*\n\n"
                             f"Tu comprobante de pago para *{srv_rechazado}* no pudo ser verificado (puede ser ilegible, incorrecto o duplicado).\n\n"
-                            "Tu suscripción actual sigue intacta. Por favor, verifica los datos e intenta reportar tu pago nuevamente desde el menú."
+                            "Tu suscripción sigue intacta. Por favor, verifica los datos e intenta reportar tu pago nuevamente."
                         )
                         enviar_mensaje_callback(int(tid_cliente), msg_rechazo, get_main_menu_keyboard())
                     except Exception:
@@ -2017,7 +1550,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # MENÚ PRINCIPAL Y CLIENTE (MOSTRAR DATOS Y PIN)
+    # MENÚ PRINCIPAL Y CLIENTE (VER DATOS, OTP, RENOVACIONES, ETC.)
     # -------------------------------------------------------------
     elif accion == "ver_datos" or "cuenta" in accion:
         if str_chat_id in esperando_captura_pago:
@@ -2106,8 +1639,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
             mensaje_peticion = (
                 "✏️ *ESCRIBE TU NUEVO NOMBRE*\n\n"
-                "Escribe a continuación el nombre que deseas asignarle a tu perfil (Ej: *Papá*, *Sofía*, *Cine*).\n\n"
-                "⚠️ *Nota:* Solo puedes cambiar el nombre de tu perfil una vez por ciclo de suscripción."
+                "Escribe a continuación el nombre que deseas asignarle a tu perfil (Ej: *Papá*, *Sofía*, *Cine*)."
             )
             teclado_canc = {
                 "inline_keyboard": [[{"text": "🔙 Cancelar y Volver", "callback_data": "menu_renombrar"}]]
@@ -2127,8 +1659,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             limpiar_fila_cancelada_o_renovacion(row_huerta)
 
         if not verificar_cliente_activo(chat_id):
-            registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_callback)
-
+            registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_callback, ADMIN_ID)
             mensaje = "🔒 *ACCESO RESTRINGIDO*\n\nPara solicitar códigos, debes tener al menos una pantalla en estado *Activo* y con correo asignado."
             teclado = get_datos_keyboard(mostrar_renovar=True)
             if es_callback and editar_mensaje_callback:
@@ -2178,7 +1709,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             ejecutar_busqueda_otp(chat_id, str_chat_id, servicio_seleccionado, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback)
         except Exception as e:
             print(f"Error en selector OTP: {e}")
-            enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error al seleccionar la pantalla. Intenta de nuevo.", get_back_keyboard())
+            enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
 
     elif accion == "renovar_suscripcion":
         if str_chat_id in esperando_captura_pago:
@@ -2225,14 +1756,15 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             
             iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "renovacion", row_idx_elegido, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
         except Exception as e:
-            print(f"Error procesando renovación de fila específica: {e}")
-            enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error al seleccionar la pantalla. Intenta de nuevo.", get_back_keyboard())
+            print(f"Error procesando renovación: {e}")
+            enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
 
     elif accion == "comprar_extra":
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
             limpiar_fila_cancelada_o_renovacion(row_huerta)
 
+        from config_y_estado import PRECIO_DISNEY_USD, PRECIO_NETFLIX_USD
         mensaje = (
             "🛒 *COMPRAR NUEVA PANTALLA*\n\n"
             "¿Qué plataforma deseas comprar como nueva pantalla?\n\n"
@@ -2261,13 +1793,11 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         srv_clave = "netflix" if es_netflix else "disney"
         
         nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
-        
         iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, srv_clave, "nueva", nueva_fila_idx, message_id, enviar_mensaje_callback, editar_mensaje_callback, es_callback, cupon_aplicado=None)
 
     elif accion.startswith("usar_cupon_"):
         try:
             row_idx_target = int(accion.split("_")[-1])
-            
             esperando_codigo_cupon_cliente[str_chat_id] = {
                 "servicio_clave": "netflix" if "netflix" in accion else "disney",
                 "tipo_operacion": "renovacion",
@@ -2285,13 +1815,14 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # SOPORTE, PAGOS Y PREGUNTAS FRECUENTES (FAQ) & TÉRMINOS
+    # SOPORTE, FAQ Y TÉRMINOS
     # -------------------------------------------------------------
     elif accion == "soporte" or "pago" in accion:
         if str_chat_id in esperando_captura_pago:
             row_huerta = esperando_captura_pago.pop(str_chat_id)
             limpiar_fila_cancelada_o_renovacion(row_huerta)
 
+        from config_y_estado import WHATSAPP_NUMERO
         texto_wa = f"Hola, necesito soporte con mi servicio de Streaming. Mi ID es: {str_chat_id}."
         url_whatsapp = f"https://wa.me/{WHATSAPP_NUMERO}?text={texto_wa.replace(' ', '%20')}"
         teclado_whatsapp = {
@@ -2312,22 +1843,12 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         mensaje_faq = (
             "❓ *PREGUNTAS FRECUENTES (FAQ)* ❓\n\n"
             "1️⃣ *¿Cuál es la diferencia entre el PIN y el Código de Acceso (OTP)?*\n"
-            "• **El Código (OTP):** Es un código temporal de 4 a 6 dígitos que envía la plataforma al correo para *iniciar sesión* o validar tu dispositivo. Lo pides en el botón *🔑 Solicitar Código*.\n"
-            "• **El PIN de Perfil:** Es una clave fija de 4 números que protege tu pantalla personal para que nadie más entre en ella. Lo ves fijo en *📲 Ver mis datos / pantallas*.\n\n"
-            "2️⃣ *¿Cómo obtengo el código de inicio de sesión (OTP)?*\n"
-            "Primero dale a 'Enviar código' en tu TV o pantalla, espera 10 segundos y luego presiona *🔑 Solicitar Código* en el menú principal del bot.\n\n"
-            "3️⃣ *¿Cómo aplico mi cupón de descuento?*\n"
-            "En la pantalla de pago encontrarás un botón directo para insertar tu código promocional antes de transferir.\n\n"
-            "4️⃣ *¿Qué pasa si sale 'Pendiente de Stock'?*\n"
-            "Significa que las cuentas inmediatas están al 100%, pero puedes pagar para asegurar tu **prioridad #1** y en cuanto carguemos stock nuevo recibirás tu acceso automático.\n\n"
-            "5️⃣ *¿Cuánto dura la suscripción?*\n"
+            "• **El Código (OTP):** Código temporal de 4 a 6 dígitos que envía la plataforma al correo para *iniciar sesión*.\n"
+            "• **El PIN de Perfil:** Clave fija de 4 números que protege tu pantalla personal.\n\n"
+            "2️⃣ *¿Cuánto dura la suscripción?*\n"
             "Cada pago aprobado activa tu pantalla por exactamente **30 días**."
         )
-        teclado_faq = {
-            "inline_keyboard": [
-                [{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]
-            ]
-        }
+        teclado_faq = {"inline_keyboard": [[{"text": "🔙 Volver a Soporte", "callback_data": "soporte"}]]}
         if es_callback and editar_mensaje_callback:
             editar_mensaje_callback(chat_id, message_id, mensaje_faq, teclado_faq)
         else:
@@ -2337,19 +1858,11 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion == "ver_terminos":
         mensaje_terminos = (
             "📜 *TÉRMINOS Y CONDICIONES DEL SERVICIO* 📜\n\n"
-            "Al adquirir o renovar una pantalla con nosotros, aceptas las siguientes normas para garantizar la estabilidad de todos los usuarios:\n\n"
-            "1️⃣ *1 Pantalla = 1 Dispositivo a la vez:* Tu suscripción te da derecho a reproducir contenido en **un (1) solo dispositivo en simultáneo**. Si intentas reproducir en dos pantallas al mismo tiempo, el sistema bloqueará la sesión.\n\n"
-            "2️⃣ *Respeto a los Perfiles y PINs:* Ingresa **únicamente** a tu perfil asignado usando tu PIN de seguridad. Entrar, borrar o modificar perfiles ajenos es motivo de suspensión inmediata sin reembolso.\n\n"
-            "3️⃣ *Prohibido alterar la Cuenta Maestra:* Está estrictamente prohibido cambiar el correo, la contraseña general, el plan de facturación o cerrar la sesión de otros dispositivos.\n\n"
-            "4️⃣ *Uso Personal:* Los datos de acceso y códigos OTP son de uso exclusivo del titular registrado en el bot.\n\n"
-            "5️⃣ *Renovaciones y Vencimientos:* Tienes hasta el día de tu fecha de vencimiento para reportar tu pago. Pasada esa fecha, el sistema liberará tu cupo automáticamente para otro cliente.\n\n"
-            "6️⃣ *Garantía Total:* Cuentas con soporte y garantía activa durante los **30 días** de tu suscripción ante cualquier novedad técnica."
+            "1️⃣ *1 Pantalla = 1 Dispositivo a la vez:* Tu suscripción te da derecho a reproducir en un solo dispositivo.\n"
+            "2️⃣ *Respeto a los Perfiles:* Ingresa únicamente a tu perfil asignado usando tu PIN.\n"
+            "3️⃣ *Garantía Total:* Cuentas con soporte activo durante los **30 días** de tu suscripción."
         )
-        teclado_term = {
-            "inline_keyboard": [
-                [{"text": "🔙 Volver al Soporte", "callback_data": "soporte"}]
-            ]
-        }
+        teclado_term = {"inline_keyboard": [[{"text": "🔙 Volver al Soporte", "callback_data": "soporte"}]]}
         if es_callback and editar_mensaje_callback:
             editar_mensaje_callback(chat_id, message_id, mensaje_terminos, teclado_term)
         else:
@@ -2360,1205 +1873,3 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         mensaje = "¡Hola! Selecciona una opción del menú de abajo:"
         teclado = get_main_menu_keyboard()
         enviar_mensaje_callback(chat_id, mensaje, teclado)
-
-
-def enviar_difusion_masiva(texto_mensaje, enviar_msg_cb):
-    """Envía un mensaje masivo a todos los clientes únicos registrados en Google Sheets."""
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        telegrams_enviados = set()
-        contador = 0
-
-        for r in registros:
-            tid = safe_get(r, "Telegram_ID", "").strip()
-            if tid and tid not in telegrams_enviados:
-                telegrams_enviados.add(tid)
-                try:
-                    enviar_msg_cb(int(tid), texto_mensaje, get_main_menu_keyboard())
-                    contador += 1
-                    time.sleep(0.1)
-                except Exception as e:
-                    print(f"No se pudo enviar difusión a {tid}: {e}")
-        return contador
-    except Exception as e:
-        print(f"Error en difusión masiva: {e}")
-        return 0
-
-
-def validar_y_consumir_cupon(codigo_ingresado):
-    with candado_operaciones:  # <--- BLOQUEO SEGURO DE CONCURRENCIA
-        try:
-            sheet_principal = conectar_sheets()
-            spreadsheet = sheet_principal.spreadsheet
-            
-            try:
-                sheet_cupones = spreadsheet.worksheet("Cupones")
-            except Exception:
-                return False, "❌ El cupón ingresado no existe."
-
-            registros = sheet_cupones.get_all_records()
-            ahora = obtener_hora_venezuela().replace(tzinfo=None)
-
-            for idx, row in enumerate(registros, start=2):
-                codigo_db = safe_get(row, "Codigo", "").upper()
-                
-                if codigo_db == codigo_ingresado.upper():
-                    estado = safe_get(row, "Estado", "Activo").lower()
-                    if estado != "activo":
-                        return False, "❌ Este cupón ya expiró o no está disponible."
-
-                    fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
-                    duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
-                    
-                    if fecha_creacion_str and duracion_horas_str.isdigit():
-                        duracion_horas = int(duracion_horas_str)
-                        if duracion_horas > 0:
-                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                                try:
-                                    fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
-                                    fecha_expiracion = fecha_creacion + datetime.timedelta(hours=duracion_horas)
-                                    
-                                    if ahora > fecha_expiracion:
-                                        sheet_cupones.update_cell(idx, 8, "Expirado")
-                                        return False, "⏳ ¡Este cupón relámpago ya expiró!"
-                                    break
-                                except ValueError:
-                                    continue
-
-                    usos_max = int(safe_get(row, "Usos Maximos", "999999"))
-                    veces_usado = int(safe_get(row, "Veces Usado", "0"))
-
-                    if veces_usado >= usos_max:
-                        sheet_cupones.update_cell(idx, 8, "Agotado")
-                        return False, "❌ Este cupón ya alcanzó su límite máximo de usos."
-
-                    sheet_cupones.update_cell(idx, 7, veces_usado + 1)
-                    if (veces_usado + 1) >= usos_max and duracion_horas == 0:
-                        sheet_cupones.update_cell(idx, 8, "Agotado")
-
-                    tipo_desc = safe_get(row, "Tipo", "Fijo")
-                    valor_desc = float(safe_get(row, "Valor", "0"))
-                    return True, {"tipo": tipo_desc, "valor": valor_desc, "codigo": codigo_db}
-
-            return False, "❌ El código de cupón ingresado es inválido."
-        except Exception as e:
-            print(f"Error validando cupón: {e}")
-            return False, "❌ Ocurrió un error al validar el cupón."
-
-
-def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, servicio_clave, tipo_operacion, row_idx_target, message_id, enviar_cb, editar_cb, es_cb, cupon_aplicado=None):
-    esperando_captura_pago[str_chat_id] = row_idx_target
-    
-    es_netflix = (servicio_clave == "netflix")
-    servicio_elegido = "Netflix" if es_netflix else "Disney+"
-    precio_base = PRECIO_NETFLIX_USD if es_netflix else PRECIO_DISNEY_USD
-    precio_usd = precio_base
-    sin_stock = False
-
-    texto_descuento_nota = ""
-    codigo_usado_str = "Ninguno (Precio Regular)"
-
-    if cupon_aplicado:
-        codigo_usado_str = cupon_aplicado["codigo"]
-        tipo_desc = cupon_aplicado["tipo"]
-        valor_desc = cupon_aplicado["valor"]
-
-        if tipo_desc.lower() == "fijo":
-            precio_usd = max(0.50, precio_base - valor_desc)
-            texto_descuento_nota = f"🎟️ *Cupón aplicado:* `{codigo_usado_str}` (-${valor_desc:.2f} USD)\n"
-        else:
-            descuento_calculado = (precio_base * valor_desc) / 100
-            precio_usd = max(0.50, precio_base - descuento_calculado)
-            texto_descuento_nota = f"🎟️ *Cupón aplicado:* `{codigo_usado_str}` (-{valor_desc}%)\n"
-
-    try:
-        sheet = conectar_sheets()
-        hora_actual_iso = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.update_cell(row_idx_target, 5, hora_actual_iso) 
-        sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-        
-        registros = sheet.get_all_records()
-        fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
-        if "pendiente de stock" in safe_get(fila_obj, "Cuenta", "").lower():
-            sin_stock = True
-    except Exception as e:
-        print(f"Error actualizando celda de pago: {e}")
-
-    tasa_usdt = obtener_tasa_usdt_hoy()
-    monto_bs = round(precio_usd * tasa_usdt, 2)
-
-    detalles_pago_activos[str_chat_id] = {
-        "cupon": codigo_usado_str,
-        "monto_usd": precio_usd,
-        "tasa": tasa_usdt,
-        "total_bs": monto_bs
-    }
-
-    texto_soporte = f"Hola, tengo dudas o necesito asistencia técnica con mi servicio de Streaming. Mi ID de Telegram es: {str_chat_id}."
-    url_whatsapp_soporte = f"https://wa.me/{WHATSAPP_NUMERO}?text={texto_soporte.replace(' ', '%20')}"
-
-    aviso_stock = ""
-    if sin_stock:
-        aviso_stock = (
-            "⏳ *NOTA DE DISPONIBILIDAD:* Nuestras cuentas de entrega inmediata para "
-            f"*{servicio_elegido}* están al 100% en este instante, pero puedes realizar tu pago "
-            "para asegurar **prioridad #1** en la asignación de nuestra próxima cuenta.\n\n"
-        )
-    
-    mensaje = (
-        f"💳 *DATOS DE PAGO — {servicio_elegido.upper()}*\n\n"
-        f"{aviso_stock}"
-        f"{texto_descuento_nota}"
-        f"💵 *Monto a Pagar:* `{precio_usd:.2f} USDT`\n"
-        f"📈 *Tasa del día:* `{tasa_usdt} Bs`\n"
-        f"💰 *Total en Bolívares:* `{monto_bs} Bs`\n\n"
-        f"📲 *Datos de Pago Móvil (Toca para copiar):*\n"
-        f"• *Banco:* {PAGO_MOVIL_BANCO}\n"
-        f"• *Cédula:* `{PAGO_MOVIL_CEDULA}`\n"
-        f"• *Teléfono:* `{PAGO_MOVIL_TELEFONO}`\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📸 *PASO FINAL:* Realiza el pago y **envía tu captura o referencia por este mismo chat**."
-    )
-    
-    teclado_pago_botones = []
-    if not cupon_aplicado and existen_cupones_activos():
-        teclado_pago_botones.append([{"text": "🎟️ ¿Tienes un cupón? Canjéalo aquí", "callback_data": f"usar_cupon_{row_idx_target}"}])
-    
-    teclado_pago_botones.append([{"text": "💬 Soporte Técnico (Solo dudas)", "url": url_whatsapp_soporte}])
-    teclado_pago_botones.append([{"text": "🔙 Cancelar y Volver", "callback_data": "menu_principal"}])
-
-    teclado_pago = {"inline_keyboard": teclado_pago_botones}
-
-    if es_cb and editar_cb:
-        editar_cb(chat_id, message_id, mensaje, teclado_pago)
-    else:
-        enviar_cb(chat_id, mensaje, teclado_pago)
-
-
-def guardar_nuevo_cupon_sheet(chat_id, sesion_c, enviar_msg_cb):
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        try:
-            sheet_cupones = spreadsheet.worksheet("Cupones")
-        except Exception:
-            sheet_cupones = spreadsheet.add_worksheet(title="Cupones", rows="1000", cols="8")
-            sheet_cupones.append_row(["Codigo", "Tipo", "Valor", "Fecha de Creacion", "Duracion (Horas)", "Usos Maximos", "Veces Usado", "Estado"])
-
-        try:
-            fila_1 = sheet_cupones.row_values(1)
-            if len(fila_1) < 8:
-                sheet_cupones.update("A1:H1", [["Codigo", "Tipo", "Valor", "Fecha de Creacion", "Duracion (Horas)", "Usos Maximos", "Veces Usado", "Estado"]])
-        except Exception:
-            pass
-
-        codigo = sesion_c["codigo"]
-        tipo = sesion_c["tipo"]
-        valor = sesion_c["valor"]
-        fecha_creacion = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
-        duracion_horas = sesion_c["duracion_horas"]
-        usos_maximos = sesion_c["usos_maximos"]
-        veces_usado = 0
-        estado = "Activo"
-
-        sheet_cupones.append_row([
-            codigo,
-            tipo,
-            str(valor),
-            fecha_creacion,
-            str(duracion_horas),
-            str(usos_maximos),
-            str(veces_usado),
-            estado
-        ])
-
-        asistente_cupon_admin.pop(str(chat_id), None)
-
-        detalle_limite = f"{duracion_horas} horas" if duracion_horas > 0 else f"{usos_maximos} usos máximos"
-        simbolo = "$" if tipo == "Fijo" else "%"
-
-        enviar_msg_cb(
-            chat_id,
-            f"✅ *¡CUPÓN CREADO CON ÉXITO!*\n\n"
-            f"• *Código:* `{codigo}`\n"
-            f"• *Descuento:* {valor}{simbolo} ({tipo})\n"
-            f"• *Límite:* {detalle_limite}\n"
-            f"• *Estado:* Activo y listo para usar.",
-            {
-                "inline_keyboard": [
-                    [{"text": "🎟️ Ver Lista de Cupones", "callback_data": "admin_ver_cupones"}],
-                    [{"text": "🔙 Volver a Gestión de Cupones", "callback_data": "admin_gestionar_cupones"}]
-                ]
-            }
-        )
-    except Exception as e:
-        asistente_cupon_admin.pop(str(chat_id), None)
-        print(f"Error guardando cupón: {e}")
-        enviar_msg_cb(chat_id, f"❌ Ocurrió un error al guardar el cupón en Google Sheets: {e}", {
-            "inline_keyboard": [[{"text": "🔙 Volver", "callback_data": "admin_gestionar_cupones"}]]
-        })
-
-
-def obtener_pin_asignado_cliente(correo_cuenta, nombre_perfil):
-    if not correo_cuenta or "pendiente" in correo_cuenta.lower() or "asignar" in correo_cuenta.lower():
-        return "N/A"
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        registros = sheet_cuentas.get_all_records()
-
-        num_perfil_limpio = "Perfil 1"
-        for n in range(1, 10):
-            if f"perfil {n}" in str(nombre_perfil).lower():
-                num_perfil_limpio = f"Perfil {n}"
-                break
-
-        for c in registros:
-            correo_c = safe_get(c, "Correo (Usuario)", safe_get(c, "Correo", ""))
-            if correo_c.lower() == correo_cuenta.lower():
-                pins_texto = safe_get(c, "PINs de Perfiles", "")
-                for parte in pins_texto.split("|"):
-                    if num_perfil_limpio.lower() in parte.lower():
-                        if ":" in parte:
-                            return parte.split(":")[-1].strip()
-                return pins_texto if pins_texto else "Sin PIN"
-        return "No registrado"
-    except Exception as e:
-        print(f"Error consultando PIN: {e}")
-        return "S/N"
-
-
-def registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_cb):
-    str_chat_id = str(chat_id).strip()
-    ahora = time.time()
-    
-    if "intentos_anormales" not in control_intentos_otp:
-        control_intentos_otp["intentos_anormales"] = {}
-        
-    if str_chat_id not in control_intentos_otp["intentos_anormales"]:
-        control_intentos_otp["intentos_anormales"][str_chat_id] = {"contador": 0, "primer_intento": ahora}
-        
-    registro = control_intentos_otp["intentos_anormales"][str_chat_id]
-    
-    if ahora - registro["primer_intento"] > 3600:
-        registro["contador"] = 0
-        registro["primer_intento"] = ahora
-        
-    registro["contador"] += 1
-    
-    if registro["contador"] >= 3 and ADMIN_ID and enviar_mensaje_cb:
-        nombre_completo = f"{nombre} (@{username})" if username else nombre
-        alerta_anomalia = (
-            "🚨 *¡ALERTA DE COMPORTAMIENTO SOSPECHOSO!* 🚨\n\n"
-            f"• *Usuario:* {nombre_completo}\n"
-            f"• *Telegram ID:* `{str_chat_id}`\n"
-            f"• *Incidente:* Ha intentado solicitar códigos de acceso múltiples veces sin tener una suscripción activa o con cuenta vencida.\n\n"
-            "💡 Es posible que este usuario esté intentando acceder sin pagar o buscando filtrar accesos. Puedes buscar his ID en `/admin` para verificarlo."
-        )
-        try:
-            enviar_mensaje_cb(int(ADMIN_ID), alerta_anomalia)
-            registro["contador"] = 0
-        except Exception as e:
-            print(f"Error enviando alerta de anomalía al admin: {e}")
-
-
-def limpiar_fila_cancelada_o_renovacion(row_idx):
-    try:
-        sheet_principal = conectar_sheets()
-        fila_datos = sheet_principal.row_values(row_idx)
-        if len(fila_datos) < 6:
-            return
-
-        estado_actual = safe_get({"Estado": fila_datos[5]}, "Estado", "").lower()
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
-
-        if "pendiente" in estado_actual:
-            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
-                sheet_principal.update_cell(row_idx, 6, "Activo")
-                print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
-            else:
-                correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
-                if correo_a_liberar and "pendiente de stock" not in correo_a_liberar.lower():
-                    try:
-                        spreadsheet = sheet_principal.spreadsheet
-                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                        registros_cuentas = sheet_cuentas.get_all_records()
-                        for idx_c, c_row in enumerate(registros_cuentas, start=2):
-                            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
-                            if correo_cta.lower() == correo_a_liberar.lower():
-                                ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                                nuevos_ocupados = max(0, ocupados - 1)
-                                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                                if safe_get(c_row, "Estado", "").lower() == "llena":
-                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                                break
-                    except Exception as e:
-                        print(f"Aviso al liberar stock en cancelación: {e}")
-                sheet_principal.delete_rows(row_idx)
-                print(f"Fila nueva {row_idx} eliminada por cancelación.")
-    except Exception as e:
-        print(f"Error en limpieza segura de fila: {e}")
-
-
-def rechazar_pago_seguro(row_idx):
-    try:
-        sheet_principal = conectar_sheets()
-        fila_datos = sheet_principal.row_values(row_idx)
-        if len(fila_datos) < 6:
-            return "Fila no encontrada."
-
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
-
-        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
-            sheet_principal.update_cell(row_idx, 6, "Activo")
-            return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
-        else:
-            resultado = liberar_y_eliminar_fila_suscripcion(row_idx)
-            return f"Pago de la fila {row_idx} rechazado. Fila eliminada y cupo liberado con éxito."
-    except Exception as e:
-        print(f"Error en rechazo seguro: {e}")
-        return f"Error al procesar el rechazo: {e}"
-
-
-def notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, row_idx_target, detalle_operacion, enviar_cb, editar_cb=None, message_id=None, es_cb=False):
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
-        servicio_elegido = safe_get(fila_obj, "Servicio", "Disney+")
-        perfil_asignado = safe_get(fila_obj, "Pantalla", "Perfil 1")
-        cuenta_asignada = safe_get(fila_obj, "Cuenta", "Por Asignar")
-        precio_usd = PRECIO_NETFLIX_USD if "netflix" in str(servicio_elegido).lower() else PRECIO_DISNEY_USD
-
-        sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-
-        aviso_stock = ""
-        if "pendiente de stock" in str(cuenta_asignada).lower():
-            aviso_stock = (
-                "\n⏳ *Nota de Disponibilidad:* Nuestras cuentas inmediatas están llenas, "
-                "pero al entregar tu pago quedas asegurado con **prioridad #1** en la asignación.\n"
-            )
-
-        mensaje_cliente = (
-            "💵 *PAGO EN EFECTIVO REGISTRADO*\n\n"
-            f"• *Operación:* {detalle_operacion}\n"
-            f"• *Servicio:* {servicio_elegido} ({perfil_asignado})\n"
-            f"• *Monto a cancelar:* `${precio_usd:.2f} USD`\n"
-            f"{aviso_stock}\n"
-            "👤 Entrega el efectivo al encargado del local para que proceda a verificar y activar tu cuenta."
-        )
-        if es_cb and editar_cb:
-            editar_cb(chat_id, message_id, mensaje_cliente, get_back_keyboard())
-        else:
-            enviar_cb(chat_id, mensaje_cliente, get_back_keyboard())
-
-        if ADMIN_ID:
-            texto_admin = (
-                "🔔 *¡NUEVO PAGO EN EFECTIVO REPORTADO!* 🔔\n\n"
-                f"• *Cliente:* {nombre} (@{username})\n"
-                f"• *Telegram ID:* `{str_chat_id}`\n"
-                f"• *Tipo:* {detalle_operacion}\n"
-                f"• *Servicio:* {servicio_elegido} ({perfil_asignado})\n"
-                f"• *Correo/Cuenta:* {cuenta_asignada}\n"
-                f"• *Monto esperado:* `${precio_usd:.2f} USD`"
-            )
-            teclado_admin = {
-                "inline_keyboard": [
-                    [{"text": "✅ Aprobar Efectivo (+30 días)", "callback_data": f"aprobar_{row_idx_target}_efectivo"}],
-                    [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx_target}"}]
-                ]
-            }
-            enviar_cb(int(ADMIN_ID), texto_admin, teclado_admin)
-    except Exception as e:
-        print(f"Error procesando notificación de efectivo: {e}")
-        enviar_cb(chat_id, "⚠️ Ocurrió un error al registrar el pago en efectivo.", get_back_keyboard())
-
-
-def quitar_botones_telegram(chat_id, message_id):
-    token = os.getenv("TELEGRAM_TOKEN", "")
-    if not token:
-        return
-    url = f"https://api.telegram.org/bot{token}/editMessageReplyMarkup"
-    try:
-        requests.post(url, json={
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "reply_markup": {"inline_keyboard": []}
-        }, timeout=3)
-    except Exception as e:
-        print(f"No se pudieron quitar los botones: {e}")
-
-
-def ejecutar_busqueda_otp(chat_id, str_chat_id, servicio, message_id, enviar_cb, editar_cb, es_cb):
-    ahora = time.time()
-    if str_chat_id not in control_intentos_otp:
-        control_intentos_otp[str_chat_id] = {"intentos": 0, "ultimo_tiempo": 0}
-
-    datos_usuario = control_intentos_otp[str_chat_id]
-    if ahora - datos_usuario["ultimo_tiempo"] > COOLDOWN_SEGUNDOS:
-        datos_usuario["intentos"] = 0
-
-    if datos_usuario["intentos"] >= MAX_INTENTOS_RAPIDOS:
-        transcurrido = ahora - datos_usuario["ultimo_tiempo"]
-        if transcurrido < COOLDOWN_SEGUNDOS:
-            restante = int(COOLDOWN_SEGUNDOS - transcurrido)
-            mensaje = f"⏳ *LÍMITE ALCANZADO*\n\nEspera *{restante // 60}m {restante % 60}s* antes de pedir otro código."
-            teclado = get_back_keyboard()
-            if es_cb and editar_cb:
-                editar_cb(chat_id, message_id, mensaje, teclado)
-            else:
-                enviar_cb(chat_id, mensaje, teclado)
-            return
-
-    datos_usuario["intentos"] += 1
-    datos_usuario["ultimo_tiempo"] = ahora
-
-    es_netflix = "netflix" in servicio
-    nombre_plataforma = "Netflix" if es_netflix else "Disney+"
-
-    msg_espera = f"🔍 Buscando código reciente en el correo de *{nombre_plataforma}*, un momento..."
-    if es_cb and editar_cb:
-        editar_cb(chat_id, message_id, msg_espera, get_back_keyboard())
-    else:
-        enviar_cb(msg_espera)
-
-    codigo = obtener_ultimo_codigo_netflix() if es_netflix else obtener_ultimo_codigo_disney()
-
-    if codigo:
-        mensaje = f"🔑 *Tu código de acceso de {nombre_plataforma} es:*\n\n`{codigo}`\n\n_(Cópialo e ingrésalo en tu pantalla)_"
-    else:
-        mensaje = f"⚠️ No se encontraron códigos recientes de *{nombre_plataforma}*. Asegúrate de haberlo solicitado in tu TV hace unos segundos e intenta de nuevo."
-
-    teclado = get_back_keyboard()
-    if es_cb and editar_cb:
-        editar_cb(chat_id, message_id, mensaje, teclado)
-    else:
-        enviar_cb(chat_id, mensaje, teclado)
-
-
-def procesar_texto_reporte(chat_id, texto, nombre, username, enviar_cb, str_chat_id, row_idx_pendiente, enviar_foto_callback):
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        fila_obj = registros[row_idx_pendiente - 2] if (row_idx_pendiente - 2) < len(registros) else {}
-        cuenta_asociada = safe_get(fila_obj, "Cuenta", "Por Asignar")
-        servicio_asociado = safe_get(fila_obj, "Servicio", "Disney+")
-        pantalla_asociada = safe_get(fila_obj, "Pantalla", "Perfil 1")
-    except Exception:
-        cuenta_asociada = "Por Asignar"
-        servicio_asociado = "Disney+"
-        pantalla_asociada = "Perfil 1"
-
-    info_pago = detalles_pago_activos.get(str_chat_id, {})
-    cupon_txt = info_pago.get("cupon", "Ninguno (Precio Regular)")
-    monto_usd = info_pago.get("monto_usd", 0.0)
-    tasa_bs = info_pago.get("tasa", 0.0)
-    total_bs = info_pago.get("total_bs", 0.0)
-
-    if ADMIN_ID:
-        texto_admin = (
-            "🔔 *¡NUEVO REPORTE DE PAGO (TEXTO/REFERENCIA)!* 🔔\n\n"
-            f"• *Cliente:* {nombre} (@{username})\n"
-            f"• *Telegram ID:* `{str_chat_id}`\n"
-            f"• *Servicio:* {servicio_asociado} ({pantalla_asociada})\n"
-            f"• *Cuenta/Correo:* {cuenta_asociada}\n"
-            f"• *Referencia/Detalle:* `{texto}`\n\n"
-            f"🎟️ *Cupón utilizado:* `{cupon_txt}`\n"
-            f"💵 *Monto en USD:* `${monto_usd:.2f} USDT`\n"
-            f"📈 *Tasa aplicada:* `{tasa_bs} Bs`\n"
-            f"💰 *Total exacto a transferir:* `{total_bs} Bs`"
-        )
-        
-        teclado_admin = {
-            "inline_keyboard": [
-                [{"text": "✅ Aprobar y Activar (+30 días)", "callback_data": f"aprobar_{row_idx_pendiente}_digital"}],
-                [{"text": "❌ Rechazar Pago", "callback_data": f"rechazar_{row_idx_pendiente}"}]
-            ]
-        }
-        enviar_cb(int(ADMIN_ID), texto_admin, teclado_admin)
-
-    enviar_cb(chat_id, "✅ Reporte enviado con éxito al administrador. En breve verificaremos tu referencia.", get_main_menu_keyboard())
-
-
-def verificar_y_notificar_vencimientos_admin(enviar_msg_cb):
-    """Revisa las pantallas que ya vencieron y envía una alerta al admin con un botón directo para borrarlas y liberar el cupo."""
-    if not ADMIN_ID:
-        return "No hay ADMIN_ID configurado."
-
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        hoy = obtener_hora_venezuela().date()
-        avisos_enviados = 0
-
-        for idx, row in enumerate(registros, start=2):
-            estado = safe_get(row, "Estado", "").lower()
-            vencimiento_str = safe_get(row, "Vencimiento", "")
-            correo = safe_get(row, "Cuenta", "")
-            nombre_cliente = safe_get(row, "Nombre", "Cliente")
-            servicio = safe_get(row, "Servicio", "Disney+")
-            pantalla = safe_get(row, "Pantalla", "Perfil 1")
-            tid = safe_get(row, "Telegram_ID", "")
-
-            if correo and correo.lower() not in ("por asignar", "pendiente de stock"):
-                if "pendiente" in estado:
-                    continue
-
-                fecha_venc = None
-                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-                    try:
-                        fecha_venc = datetime.datetime.strptime(vencimiento_str, fmt).date()
-                        break
-                    except ValueError:
-                        continue
-
-                if fecha_venc:
-                    dias_restantes = (fecha_venc - hoy).days
-
-                    if dias_restantes < 0:
-                        dias_vencido = abs(dias_restantes)
-                        
-                        alerta_vencimiento_admin = (
-                            "🔴 *ALERTA: PERFIL VENCIDO — ACCIÓN REQUERIDA* 🔴\n\n"
-                            f"• *Vencimiento:* Hace {dias_vencido} día(s)\n"
-                            f"• *Cliente:* {nombre_cliente} (`{tid}`)\n"
-                            f"• *Servicio:* {servicio} ({pantalla})\n"
-                            f"• *Correo Maestro:* `{correo}`\n\n"
-                            "🛠️ *Pasos a seguir:*\n"
-                            "1️⃣ Entra a Netflix o Disney+ y **cierra la sesión / cambia el PIN** de este perfil para bloquear el acceso.\n"
-                            "2️⃣ Presiona el botón de abajo para **borrar la fila y liberar el cupo** de la hoja automáticamente."
-                        )
-
-                        teclado_borrar_admin = {
-                            "inline_keyboard": [
-                                [{"text": "🗑️ Liberar Perfil y Borrar Fila", "callback_data": f"admin_liberar_{idx}"}],
-                                [{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]
-                            ]
-                        }
-
-                        try:
-                            enviar_msg_cb(int(ADMIN_ID), alerta_vencimiento_admin, teclado_borrar_admin)
-                            avisos_enviados += 1
-                            time.sleep(0.2)
-                        except Exception as e:
-                            print(f"No se pudo enviar alerta de vencimiento al admin: {e}")
-
-        return f"Revisión completada. Alertas enviadas: {avisos_enviados}."
-    except Exception as e:
-        print(f"Error verificando vencimientos: {e}")
-        return f"Error: {e}"
-
-
-# ==========================================
-# FUNCIONES AUXILIARES DE GOOGLE SHEETS
-# ==========================================
-def obtener_primer_perfil_disponible(sheet, servicio_solicitado, correo_asignado):
-    try:
-        es_netflix = "netflix" in servicio_solicitado.lower()
-        limite_maximo = 5 if es_netflix else 7
-
-        registros = sheet.get_all_records()
-        perfiles_ocupados_en_cuenta = set()
-
-        for r in registros:
-            srv = safe_get(r, "Servicio", "").lower()
-            cta = safe_get(r, "Cuenta", "").lower()
-            pnt = safe_get(r, "Pantalla", "").lower()
-            
-            if servicio_solicitado.lower() in srv and cta == correo_asignado.lower():
-                for num in range(1, limite_maximo + 1):
-                    if f"perfil {num}" in pnt:
-                        perfiles_ocupados_en_cuenta.add(num)
-
-        for num in range(1, limite_maximo + 1):
-            if num not in perfiles_ocupados_en_cuenta:
-                return f"Perfil {num}"
-
-        return f"Perfil {limite_maximo + 1}"
-    except Exception as e:
-        print(f"Error buscando perfil disponible: {e}")
-        return "Perfil 1"
-
-
-def asignar_correo_desde_stock(sheet_principal, servicio_solicitado, chat_id="", nombre_cliente="", enviar_mensaje_callback=None):
-    with candado_operaciones:  # <--- BLOQUEO SEGURO DE CONCURRENCIA
-        try:
-            spreadsheet = sheet_principal.spreadsheet
-            try:
-                sheet_cuentas = spreadsheet.worksheet("Cuentas")
-            except Exception:
-                return "Por Asignar"
-
-            registros_cuentas = sheet_cuentas.get_all_records()
-            
-            for idx_c, cuenta_row in enumerate(registros_cuentas, start=2):
-                srv_cuenta = safe_get(cuenta_row, "Servicio", "").lower()
-                estado_cuenta = safe_get(cuenta_row, "Estado", "").lower()
-                
-                if servicio_solicitado.lower() in srv_cuenta and estado_cuenta == "activa":
-                    try:
-                        limite_defecto = 5 if "netflix" in servicio_solicitado.lower() else 7
-                        capacidad = int(safe_get(cuenta_row, "Capacidad Total", str(limite_defecto)))
-                        ocupados = int(safe_get(cuenta_row, "Perfiles Ocupados", "0"))
-                    except ValueError:
-                        capacidad = 5 if "netflix" in servicio_solicitado.lower() else 7
-                        ocupados = 0
-
-                    if ocupados < capacidad:
-                        correo_encontrado = safe_get(cuenta_row, "Correo (Usuario)", safe_get(cuenta_row, "Correo", ""))
-                        
-                        nuevos_ocupados = ocupados + 1
-                        sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                        
-                        if nuevos_ocupados >= capacidad:
-                            sheet_cuentas.update_cell(idx_c, 6, "Llena")
-                            if ADMIN_ID and enviar_mensaje_callback:
-                                alerta_stock = (
-                                    f"⚠️ *¡ALERTA DE STOCK AGOTADO!* ⚠️\n\n"
-                                    f"La cuenta de *{servicio_solicitado}* (`{correo_encontrado}`) ha llegado al 100% de su capacidad y está *Llena*.\n\n"
-                                    f"💡 *Acción recomendada:* Carga una nueva cuenta en la pestaña 'Cuentas' lo antes posible."
-                                )
-                                try:
-                                    enviar_mensaje_callback(int(ADMIN_ID), alerta_stock)
-                                except Exception:
-                                    pass
-                            
-                        return correo_encontrado
-                        
-            if ADMIN_ID and enviar_mensaje_callback:
-                alerta_sin_stock = (
-                    f"🚨 *¡COMPRA CON STOCK AGOTADO (LISTA DE ESPERA)!* 🚨\n\n"
-                    f"• *Cliente:* {nombre_cliente}\n"
-                    f"• *Telegram ID:* `{chat_id}`\n"
-                    f"• *Servicio:* {servicio_solicitado}\n\n"
-                    f"💡 El cliente avanzó a pagar pero no había cuentas activas. Quedó marcado como *Pendiente de Stock*. ¡Carga una cuenta nueva y usa el botón *Asignar Stock Pendiente* en `/admin`!"
-                )
-                try:
-                    enviar_mensaje_callback(int(ADMIN_ID), alerta_sin_stock)
-                except Exception:
-                    pass
-
-            return "⚠️ Pendiente de Stock"
-        except Exception as e:
-            print(f"Error asignando correo desde stock: {e}")
-            return "Por Asignar"
-
-
-def procesar_asignacion_stock_masivo(enviar_msg_cb):
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        try:
-            sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        except Exception:
-            return "❌ No se encontró la pestaña 'Cuentas' en el Google Sheets."
-
-        registros_clientes = sheet_principal.get_all_records()
-        registros_cuentas = sheet_cuentas.get_all_records()
-        
-        asignados_count = 0
-
-        for idx_cli, cli_row in enumerate(registros_clientes, start=2):
-            cuenta_actual = safe_get(cli_row, "Cuenta", "")
-            
-            if "pendiente de stock" in cuenta_actual.lower():
-                servicio_cli = safe_get(cli_row, "Servicio", "Disney+")
-                tid_cliente = safe_get(cli_row, "Telegram_ID", "")
-                nombre_cliente = safe_get(cli_row, "Nombre", "Cliente")
-                estado_cli = safe_get(cli_row, "Estado", "").lower()
-                
-                cuenta_encontrada = None
-                idx_cuenta_encontrada = None
-                
-                for idx_c, cuenta_row in enumerate(registros_cuentas, start=2):
-                    srv_cuenta = safe_get(cuenta_row, "Servicio", "").lower()
-                    estado_cuenta = safe_get(cuenta_row, "Estado", "").lower()
-                    
-                    if servicio_cli.lower() in srv_cuenta and estado_cuenta == "activa":
-                        try:
-                            limite_defecto = 5 if "netflix" in servicio_cli.lower() else 7
-                            capacidad = int(safe_get(cuenta_row, "Capacidad Total", str(limite_defecto)))
-                            ocupados = int(safe_get(cuenta_row, "Perfiles Ocupados", "0"))
-                        except ValueError:
-                            capacidad = 5 if "netflix" in servicio_cli.lower() else 7
-                            ocupados = 0
-
-                        if ocupados < capacidad:
-                            cuenta_encontrada = safe_get(cuenta_row, "Correo (Usuario)", safe_get(cuenta_row, "Correo", ""))
-                            idx_cuenta_encontrada = idx_c
-                            break
-                
-                if cuenta_encontrada and idx_cuenta_encontrada:
-                    perfil_correcto = obtener_primer_perfil_disponible(sheet_principal, servicio_cli, cuenta_encontrada)
-                    
-                    sheet_principal.update_cell(idx_cli, 3, cuenta_encontrada)
-                    sheet_principal.update_cell(idx_cli, 4, perfil_correcto)
-                    
-                    fila_c_actual = sheet_cuentas.row_values(idx_cuenta_encontrada)
-                    try:
-                        ocupados_actuales = int(fila_c_actual[4])
-                    except (IndexError, ValueError):
-                        ocupados_actuales = 0
-                        
-                    nuevos_ocupados = ocupados_actuales + 1
-                    sheet_cuentas.update_cell(idx_cuenta_encontrada, 5, nuevos_ocupados)
-                    
-                    limite_defecto = 5 if "netflix" in servicio_cli.lower() else 7
-                    capacidad_total = int(fila_c_actual[3]) if len(fila_c_actual) > 3 and fila_c_actual[3].isdigit() else limite_defecto
-                    if nuevos_ocupados >= capacidad_total:
-                        sheet_cuentas.update_cell(idx_cuenta_encontrada, 6, "Llena")
-
-                    if tid_cliente and enviar_msg_cb and estado_cli == "activo":
-                        try:
-                            primer_nombre = nombre_cliente.split()[0] if nombre_cliente else "Cliente"
-                            pin_asignado = obtener_pin_asignado_cliente(cuenta_encontrada, perfil_correcto)
-                            aviso_tv_especial = (
-                                "\n\n📺 *Nota para Smart TVs (como Damasco u otros):*\n"
-                                "Si tu televisor no muestra código numérico de 4 dígitos y te pide aprobar por correo, "
-                                "avísanos por soporte para ayudarte a confirmarlo de inmediato."
-                            )
-                            mensaje_notif = (
-                                f"🎉 *¡EXCELENTE NOTICIA, {primer_nombre}!*\n\n"
-                                f"Tu cuenta de *{servicio_cli}* ya ha sido asignada y se encuentra 100% **Activa**.\n\n"
-                                f"• *Correo asignado:* `{cuenta_encontrada}`\n"
-                                f"• *Perfil:* `{perfil_correcto}`\n"
-                                f"• *PIN de seguridad:* `{pin_asignado}` 🔒"
-                                f"{aviso_tv_especial}\n\n"
-                                "Puedes ingresar al bot y presionar **📲 Ver mis datos / pantallas** para consultar los detalles completos de tu acceso."
-                            )
-                            enviar_msg_cb(int(tid_cliente), mensaje_notif, get_main_menu_keyboard())
-                        except Exception as e:
-                            print(f"No se pudo notificar al cliente {tid_cliente}: {e}")
-
-                    asignados_count += 1
-                    registros_cuentas = sheet_cuentas.get_all_records()
-
-        if asignados_count > 0:
-            return f"✅ ¡Proceso exitoso! Se han asignado cuentas nuevas a **{asignados_count}** cliente(s) que estaban en lista de espera."
-        else:
-            return "ℹ️ No hay clientes pendientes de stock o no hay suficientes cuentas activas con cupo en la pestaña 'Cuentas'."
-
-    except Exception as e:
-        print(f"Error en asignación masiva de stock: {e}")
-        return f"❌ Ocurrió un error al procesar la asignación: {e}"
-
-
-def obtener_suscripciones_por_id(chat_id):
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        str_chat_id = str(chat_id).strip()
-        resultados = []
-        for idx, r in enumerate(registros, start=2):
-            tid = safe_get(r, "Telegram_ID", "")
-            if tid == str_chat_id:
-                r["_row_index"] = idx
-                resultados.append(r)
-        return resultados
-    except Exception as e:
-        print(f"Error: {e}")
-        return []
-
-
-def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disney", enviar_mensaje_cb=None):
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        nombre_completo = f"{nombre} (@{username})" if username else nombre
-
-        for idx, r in enumerate(registros, start=2):
-            tid = safe_get(r, "Telegram_ID", "")
-            estado = safe_get(r, "Estado", "").lower()
-            srv = safe_get(r, "Servicio", "").lower()
-            
-            if tid == str_chat_id and "pendiente" in estado and servicio.lower() in srv:
-                return idx
-
-        correo_asignado = asignar_correo_desde_stock(sheet, servicio, str_chat_id, nombre_completo, enviar_mensaje_cb)
-        perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio, correo_asignado)
-        
-        sheet.append_row([str(str_chat_id), nombre_completo, correo_asignado, perfil_asignado, "", "Pendiente Pago", servicio])
-        return len(sheet.get_all_records()) + 1
-    except Exception as e:
-        print(f"Error creando fila nueva: {e}")
-        return 2
-
-
-def verificar_cliente_activo(chat_id):
-    for sub in obtener_suscripciones_por_id(chat_id):
-        estado = safe_get(sub, "Estado", "").lower()
-        cuenta = safe_get(sub, "Cuenta", "").lower()
-        if estado == "activo" and cuenta not in ("", "por asignar") and "pendiente" not in cuenta:
-            return True
-    return False
-
-
-def obtener_clientes_pendientes():
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        pendientes = []
-        for idx, row in enumerate(registros, start=2):
-            estado = safe_get(row, "Estado", "").lower()
-            if "pendiente" in estado:
-                pendientes.append((len(pendientes)+1, idx, row))
-        return pendientes
-    except Exception as e:
-        print(f"Error obteniendo pendientes: {e}")
-        return []
-
-
-def obtener_clientes_activos_general():
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        activos = []
-        for idx, row in enumerate(registros, start=2):
-            estado = safe_get(row, "Estado", "").lower()
-            cuenta = safe_get(row, "Cuenta", "")
-            if estado == "activo" and cuenta and cuenta.lower() not in ("por asignar", "pendiente de stock"):
-                activos.append((len(activos)+1, idx, row))
-        return activos
-    except Exception as e:
-        print(f"Error obteniendo clientes activos: {e}")
-        return []
-
-
-def obtener_suscripciones_vencidas():
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        vencidos = []
-        hoy = obtener_hora_venezuela().date()
-
-        for idx, row in enumerate(registros, start=2):
-            vencimiento_str = safe_get(row, "Vencimiento", "")
-            estado = safe_get(row, "Estado", "").lower()
-            cuenta = safe_get(row, "Cuenta", "")
-
-            if cuenta and cuenta.lower() not in ("por asignar", "pendiente de stock"):
-                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-                    try:
-                        fecha_venc = datetime.datetime.strptime(vencimiento_str, fmt).date()
-                        if fecha_venc < hoy or estado == "vencido":
-                            vencidos.append((len(vencidos)+1, idx, row))
-                        break
-                    except ValueError:
-                        continue
-        return vencidos
-    except Exception as e:
-        print(f"Error obteniendo vencidos: {e}")
-        return []
-
-
-def liberar_y_eliminar_fila_suscripcion(row_idx):
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        try:
-            sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        except Exception:
-            return "❌ No se encontró la pestaña 'Cuentas'."
-
-        fila_datos = sheet_principal.row_values(row_idx)
-        if len(fila_datos) < 3:
-            return "❌ La fila seleccionada no es válida o está vacía."
-
-        correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
-        
-        registros_cuentas = sheet_cuentas.get_all_records()
-        cuenta_encontrada = False
-
-        for idx_c, c_row in enumerate(registros_cuentas, start=2):
-            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
-            if correo_cta.lower() == correo_a_liberar.lower():
-                try:
-                    ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                except ValueError:
-                    ocupados = 1
-
-                nuevos_ocupados = max(0, ocupados - 1)
-                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-
-                estado_actual = safe_get(c_row, "Estado", "").lower()
-                if estado_actual == "llena":
-                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-
-                cuenta_encontrada = True
-                break
-
-        sheet_principal.delete_rows(row_idx)
-
-        msg_extra = " y se liberó un cupo en la cuenta maestra" if cuenta_encontrada else ""
-        return f"✅ ¡Suscripción de la fila {row_idx} eliminada con éxito{msg_extra}!"
-
-    except Exception as e:
-        print(f"Error liberando suscripción: {e}")
-        return f"❌ Ocurrió un error al liberar la suscripción: {e}"
-
-
-def aprobar_suscripcion_sheet(row_idx):
-    """Aprueba la suscripción con control estricto de expiración a los 30 min (exclusivo para filas nuevas) y asignación segura."""
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        fila_actual = registros[row_idx - 2] if (row_idx - 2) < len(registros) else {}
-        tid_cliente = safe_get(fila_actual, "Telegram_ID", "")
-        nombre_cliente = safe_get(fila_actual, "Nombre", "Cliente")
-        servicio_fila = safe_get(fila_actual, "Servicio", "Disney+")
-        perfil_asignado = safe_get(fila_actual, "Pantalla", "Perfil 1")
-        cuenta_fila = safe_get(fila_actual, "Cuenta", "Por Asignar")
-        timestamp_orden = safe_get(fila_actual, "Vencimiento", "")
-        estado_actual = safe_get(fila_actual, "Estado", "").lower()
-
-        if estado_actual == "activo":
-            return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
-
-        # DETERMINAR SI ES RENOVACIÓN O PANTALLA NUEVA
-        # Si la columna Vencimiento tiene una fecha en formato AAAA-MM-DD, significa que es una RENOVACIÓN (nunca se borra por tiempo).
-        es_renovacion = (timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3)
-        tipo_operacion = "Renovación" if es_renovacion else "Pantalla Nueva"
-
-        # CONTROL DE TIEMPO (30 MINUTOS) EXCLUSIVO PARA FILAS NUEVAS
-        if not es_renovacion:
-            tiempo_expirado = False
-            if timestamp_orden:
-                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                    try:
-                        hora_orden = datetime.datetime.strptime(timestamp_orden, fmt)
-                        ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
-                        diferencia_minutos = (ahora_local - hora_orden).total_seconds() / 60
-                        if diferencia_minutos > 30:
-                            tiempo_expirado = True
-                        break
-                    except ValueError:
-                        continue
-
-            # Si pasaron más de 30 minutos, liberamos la cuenta vieja asignada y buscamos una NUEVA pantalla/cuenta en stock
-            if tiempo_expirado:
-                print(f"⚠️ La orden de la fila {row_idx} superó los 30 minutos. Reasignando pantalla fresca...")
-                
-                # Liberar cuenta previa si tenía una asignada
-                if cuenta_fila and "pendiente" not in cuenta_fila.lower() and "asignar" not in cuenta_fila.lower():
-                    try:
-                        spreadsheet = sheet.spreadsheet
-                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                        registros_c = sheet_cuentas.get_all_records()
-                        for idx_c, c_row in enumerate(registros_c, start=2):
-                            if safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", "")).lower() == cuenta_fila.lower():
-                                ocu = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                                sheet_cuentas.update_cell(idx_c, 5, max(0, ocu - 1))
-                                if safe_get(c_row, "Estado", "").lower() == "llena":
-                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                                break
-                    except Exception as e:
-                        print(f"Aviso liberando cuenta expirada de 30 min: {e}")
-
-                # Buscar nuevo correo y perfil disponible de inmediato
-                correo_fresco = asignar_correo_desde_stock(sheet, servicio_fila, tid_cliente, nombre_cliente)
-                if correo_fresco and "pendiente" not in correo_fresco.lower():
-                    cuenta_fila = correo_fresco
-                    perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio_fila, cuenta_fila)
-                    sheet.update_cell(row_idx, 3, cuenta_fila)
-                    sheet.update_cell(row_idx, 4, perfil_asignado)
-                else:
-                    cuenta_fila = "⚠️ Pendiente de Stock"
-                    sheet.update_cell(row_idx, 3, cuenta_fila)
-
-        fecha_base = obtener_hora_venezuela().date()
-        nueva_fecha = (fecha_base + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
-        
-        sheet.update_cell(row_idx, 5, nueva_fecha)
-        sheet.update_cell(row_idx, 6, "Activo")
-        
-        return True, tid_cliente, False, nombre_cliente, servicio_fila, perfil_asignado, tipo_operacion, cuenta_fila
-    except Exception as e:
-        print(f"Error aprobando suscripción: {e}")
-        return False, None, False, "", "Disney+", "Perfil 1", "Renovación", "Por Asignar"
-
-
-def registrar_venta_en_historial(nombre_cliente, tid_cliente, servicio, perfil, monto_usd, tipo_operacion, metodo_pago):
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        encabezados_esperados = ["Fecha y Hora", "Cliente", "Telegram ID", "Servicio", "Perfil Asignado", "Monto USD", "Tipo", "Método Pago"]
-        try:
-            sheet_ventas = spreadsheet.worksheet("Ventas")
-            fila_1 = sheet_ventas.row_values(1)
-            if len(fila_1) < 8:
-                sheet_ventas.update("A1:H1", [encabezados_esperados])
-        except Exception:
-            sheet_ventas = spreadsheet.add_worksheet(title="Ventas", rows="1000", cols="8")
-            sheet_ventas.append_row(encabezados_esperados)
-
-        fecha_hora = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
-        sheet_ventas.append_row([
-            fecha_hora,
-            str(nombre_cliente),
-            str(tid_cliente),
-            str(servicio),
-            str(perfil),
-            f"${float(monto_usd):.2f}",
-            str(tipo_operacion),
-            str(metodo_pago)
-        ])
-    except Exception as e:
-        print(f"Error al registrar la venta en el historial: {e}")
-
-
-def verificar_alerta_vencimiento(vencimiento_str, estado_str):
-    if estado_str.lower() != "activo":
-        return "🔴"
-    hoy = obtener_hora_venezuela().date()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-        try:
-            fecha_venc = datetime.datetime.strptime(vencimiento_str, fmt).date()
-            dias = (fecha_venc - hoy).days
-            if dias < 0: return "⚠️ *(Vencida)*"
-            elif dias == 0: return "🟠 *(Vence HOY)*"
-            elif dias <= 3: return f"🟡 *(Vence en {dias} días)*"
-            return "🟢"
-        except ValueError:
-            continue
-    return ""
-
-
-def generar_reporte_admin():
-    try:
-        sheet = conectar_sheets()
-        registros = sheet.get_all_records()
-        activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
-        pendientes = sum(1 for r in registros if "pendiente" in safe_get(r, "Estado", "").lower())
-        en_espera_stock = sum(1 for r in registros if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
-        vencidos_total = len(obtener_suscripciones_vencidas())
-        unicos = len(set(safe_get(r, "Telegram_ID", "") for r in registros if safe_get(r, "Telegram_ID", "")))
-        return (
-            "📊 *PANEL DE CONTROL INDUSTRIAL*\n\n"
-            f"👥 *Clientes únicos:* {unicos}\n"
-            f"📺 *Total pantallas:* {len(registros)}\n"
-            f"🟢 *Activas:* {activas}\n"
-            f"🟡 *Pagos pendientes:* {pendientes}\n"
-            f"🔴 *Vencidas por depurar:* {vencidos_total}\n"
-            f"⏳ *En espera de stock:* {en_espera_stock}"
-        )
-    except Exception as e:
-        return f"❌ Error: {e}"
-
-
-def generar_resumen_completo_negocio():
-    try:
-        sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        registros_clientes = sheet_principal.get_all_records()
-        total_pantallas = len(registros_clientes)
-        activas_cli = sum(1 for r in registros_clientes if safe_get(r, "Estado", "").lower() == "activo")
-        pendientes_pago = sum(1 for r in registros_clientes if "pendiente" in safe_get(r, "Estado", "").lower())
-        en_espera_stock = sum(1 for r in registros_clientes if "pendiente de stock" in safe_get(r, "Cuenta", "").lower())
-        clientes_unicos = len(set(safe_get(r, "Telegram_ID", "") for r in registros_clientes if safe_get(r, "Telegram_ID", "")))
-
-        netflix_cli = sum(1 for r in registros_clientes if "netflix" in safe_get(r, "Servicio", "").lower())
-        disney_cli = sum(1 for r in registros_clientes if "disney" in safe_get(r, "Servicio", "").lower())
-
-        total_cuentas_maestras = 0
-        cuentas_activas_stock = 0
-        cuentas_llenas_stock = 0
-        capacidad_total_perfiles = 0
-        perfiles_totales_ocupados = 0
-
-        try:
-            sheet_cuentas = spreadsheet.worksheet("Cuentas")
-            registros_cuentas = sheet_cuentas.get_all_records()
-            total_cuentas_maestras = len(registros_cuentas)
-            for c in registros_cuentas:
-                est_c = safe_get(c, "Estado", "").lower()
-                if est_c == "activa":
-                    cuentas_activas_stock += 1
-                elif est_c == "llena":
-                    cuentas_llenas_stock += 1
-                
-                try:
-                    cap = int(safe_get(c, "Capacidad Total", "5"))
-                    ocu = int(safe_get(c, "Perfiles Ocupados", "0"))
-                except ValueError:
-                    cap = 5
-                    ocu = 0
-                
-                capacidad_total_perfiles += cap
-                perfiles_totales_ocupados += ocu
-        except Exception:
-            pass
-
-        total_ingresos_usd = 0.0
-        ventas_totales_count = 0
-        try:
-            sheet_ventas = spreadsheet.worksheet("Ventas")
-            registros_ventas = sheet_ventas.get_all_records()
-            ventas_totales_count = len(registros_ventas)
-            for v in registros_ventas:
-                monto_str = safe_get(v, "Monto USD", "0").replace("$", "").strip()
-                try:
-                    total_ingresos_usd += float(monto_str)
-                except ValueError:
-                    pass
-        except Exception:
-            pass
-
-        cupos_disponibles = max(0, capacidad_total_perfiles - perfiles_totales_ocupados)
-
-        resumen_texto = (
-            "📈 *RESUMEN GENERAL DEL NEGOCIO* 📈\n\n"
-            f"👤 *Clientes y Demografía:*\n"
-            f"• Clientes únicos: `{clientes_unicos}`\n"
-            f"• Pantallas alquiladas: `{total_pantallas}` (🟢 Activas: `{activas_cli}`)\n"
-            f"• Desglose: 📺 Netflix: `{netflix_cli}` | 📺 Disney+: `{disney_cli}`\n\n"
-            f"📦 *Estado del Inventario (Cuentas Maestras):*\n"
-            f"• Cuentas totales: `{total_cuentas_maestras}` (🟢 Activas: `{cuentas_activas_stock}` | 🔴 Llenas: `{cuentas_llenas_stock}`)\n"
-            f"• Capacidad de perfiles: `{perfiles_totales_ocupados} / {capacidad_total_perfiles}`\n"
-            f"• Cupos libres en stock: `{cupos_disponibles}`\n"
-            f"• Clientes en lista de espera (Sin stock): `{en_espera_stock}`\n\n"
-            f"💰 *Finanzas y Rendimiento:*\n"
-            f"• Transacciones registradas: `{ventas_totales_count}`\n"
-            f"• Ingresos acumulados: *`${total_ingresos_usd:.2f} USD`*\n"
-            f"• Pagos pendientes por verificar: `{pendientes_pago}`"
-        )
-        return resumen_texto
-    except Exception as e:
-        return f"❌ Error al generar el resumen del negocio: {e}"
-
-
-def get_main_menu_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📲 Ver mis datos / pantallas", "callback_data": "ver_datos"}],
-            [{"text": "🔑 Solicitar Código", "callback_data": "obtener_codigo"}],
-            [{"text": "🔄 Renovar (+30 días)", "callback_data": "renovar_suscripcion"}, {"text": "🛒 Comprar Pantalla", "callback_data": "comprar_extra"}],
-            [{"text": "💬 Soporte / Pagos", "callback_data": "soporte"}]
-        ]
-    }
-
-
-def get_datos_keyboard(mostrar_renovar=False, suscripciones=None):
-    botones = []
-    if suscripciones:
-        tiene_activas = any(safe_get(s, "Estado", "").lower() == "activo" and "pendiente" not in safe_get(s, "Cuenta", "").lower() for s in suscripciones)
-        if tiene_activas:
-            botones.append([{"text": "✏️ Personalizar Nombres de Perfil", "callback_data": "menu_renombrar"}])
-
-    if mostrar_renovar: 
-        botones.append([{"text": "🔄 Renovar Suscripción", "callback_data": "renovar_suscripcion"}],)
-        
-    botones.append([{"text": "🛒 Comprar Pantalla Adicional", "callback_data": "comprar_extra"}])
-    botones.append([{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}])
-    return {"inline_keyboard": botones}
-
-
-def get_back_keyboard():
-    return {
-        "inline_keyboard": [[{"text": "🔙 Volver al Menú", "callback_data": "menu_principal"}]]
-    }
