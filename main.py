@@ -3,7 +3,7 @@ import time
 import datetime
 import threading
 import requests
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from bot_logic import (
     procesar_mensaje_bot,
     conectar_sheets,
@@ -12,6 +12,7 @@ from bot_logic import (
     obtener_hora_venezuela,
 )
 from alertas import revisar_y_enviar_alertas_vencimiento
+from whatsapp_api import enviar_mensaje_whatsapp
 
 app = FastAPI()
 
@@ -110,6 +111,57 @@ def home():
     return {"status": "El bot de streaming está activo y funcionando"}
 
 
+# =============================================================
+# WEBHOOK DE WHATSAPP (META CLOUD API)
+# =============================================================
+@app.get("/webhook/whatsapp")
+def verificar_webhook_whatsapp(request: Request):
+    """Verifica el token de seguridad configurado en el panel de desarrolladores de Meta."""
+    verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "tu_token_secreto_personalizado")
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode and token:
+        if mode == "subscribe" and token == verify_token:
+            return Response(content=challenge, media_type="text/plain", status_code=200)
+        return Response(status_code=403)
+    return Response(status_code=400)
+
+
+@app.post("/webhook/whatsapp")
+async def recibir_mensaje_whatsapp(request: Request):
+    """Recibe mensajes y multimedia enviados por los clientes a través de WhatsApp."""
+    try:
+        body = await request.json()
+        entry = body.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages")
+
+        if messages:
+            msg = messages[0]
+            remitente = msg.get("from")  # Número de teléfono de WhatsApp del cliente
+            tipo_msg = msg.get("type")
+
+            if tipo_msg == "text":
+                texto_texto = msg.get("text", {}).get("body", "").strip()
+                
+                # Respuesta de prueba temporal para validar la conexión
+                enviar_mensaje_whatsapp(
+                    remitente, 
+                    f"¡Hola! Recibí tu mensaje por WhatsApp: '{texto_texto}'. Pronto estará sincronizado con el bot principal."
+                )
+
+        return {"status": "success"}
+    except Exception as e:
+        print(f"Error procesando webhook de WhatsApp: {e}")
+        return {"status": "error"}
+
+
+# =============================================================
+# WEBHOOK DE TELEGRAM
+# =============================================================
 @app.post("/webhook")
 async def recibir_webhook(request: Request):
     """Recibe mensajes, clics de botones (callbacks) y fotos desde Telegram."""
