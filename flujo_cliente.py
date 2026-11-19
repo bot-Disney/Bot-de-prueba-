@@ -10,7 +10,8 @@ from config_y_estado import (
     esperando_captura_pago,
     detalles_pago_activos,
     safe_get,
-    obtener_tasa_usdt_hoy
+    obtener_tasa_usdt_hoy,
+    obtener_hora_venezuela
 )
 from teclados import get_main_menu_keyboard, get_datos_keyboard, get_back_keyboard
 from servicios_sheets import (
@@ -132,15 +133,21 @@ def iniciar_proceso_pago_con_descuento(chat_id, str_chat_id, nombre, username, s
 
     try:
         sheet = conectar_sheets()
-        hora_actual_iso = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S") if 'obtener_hora_venezuela' in globals() else ""
-        # Usamos time si hace falta o importamos de config
-        from config_y_estado import obtener_hora_venezuela
-        hora_actual_iso = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.update_cell(row_idx_target, 5, hora_actual_iso) 
-        sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
-        
         registros = sheet.get_all_records()
         fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
+        vencimiento_previo = safe_get(fila_obj, "Vencimiento", "")
+
+        # Solo guardamos el timestamp de orden si NO es una renovación (para no borrar la fecha de vencimiento previa)
+        es_renovacion_real = (
+            tipo_operacion == "renovacion"
+            or (vencimiento_previo and len(vencimiento_previo) == 10 and ("-" in vencimiento_previo or "/" in vencimiento_previo))
+        )
+        if not es_renovacion_real:
+            hora_actual_iso = obtener_hora_venezuela().strftime("%Y-%m-%d %H:%M:%S")
+            sheet.update_cell(row_idx_target, 5, hora_actual_iso)
+
+        sheet.update_cell(row_idx_target, 6, "Pendiente Pago")
+        
         if "pendiente de stock" in safe_get(fila_obj, "Cuenta", "").lower():
             sin_stock = True
     except Exception as e:
