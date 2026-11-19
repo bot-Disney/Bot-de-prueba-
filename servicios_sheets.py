@@ -36,8 +36,8 @@ def existen_cupones_activos():
                 duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
                 
                 expirado = False
-                if fecha_creacion_str and duracion_horas_str.isdigit():
-                    duracion_horas = int(duracion_horas_str)
+                if fecha_creacion_str and str(duracion_horas_str).strip().isdigit():
+                    duracion_horas = int(str(duracion_horas_str).strip())
                     if duracion_horas > 0:
                         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
                             try:
@@ -82,22 +82,21 @@ def validar_y_consumir_cupon(codigo_ingresado):
                         return False, "❌ Este cupón ya expiró o no está disponible."
 
                     fecha_creacion_str = safe_get(row, "Fecha de Creacion", "")
-                    duracion_horas_str = safe_get(row, "Duracion (Horas)", "0")
+                    duracion_horas_str = str(safe_get(row, "Duracion (Horas)", "0")).strip()
+                    duracion_horas = int(duracion_horas_str) if duracion_horas_str.isdigit() else 0
                     
-                    if fecha_creacion_str and duracion_horas_str.isdigit():
-                        duracion_horas = int(duracion_horas_str)
-                        if duracion_horas > 0:
-                            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                                try:
-                                    fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
-                                    fecha_expiracion = fecha_creacion + datetime.timedelta(hours=duracion_horas)
-                                    
-                                    if ahora > fecha_expiracion:
-                                        sheet_cupones.update_cell(idx, 8, "Expirado")
-                                        return False, "⏳ ¡Este cupón relámpago ya expiró!"
-                                    break
-                                except ValueError:
-                                    continue
+                    if fecha_creacion_str and duracion_horas > 0:
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                            try:
+                                fecha_creacion = datetime.datetime.strptime(fecha_creacion_str, fmt)
+                                fecha_expiracion = fecha_creacion + datetime.timedelta(hours=duracion_horas)
+                                
+                                if ahora > fecha_expiracion:
+                                    sheet_cupones.update_cell(idx, 8, "Expirado")
+                                    return False, "⏳ ¡Este cupón relámpago ya expiró!"
+                                break
+                            except ValueError:
+                                continue
 
                     usos_max = int(safe_get(row, "Usos Maximos", "999999"))
                     veces_usado = int(safe_get(row, "Veces Usado", "0"))
@@ -106,12 +105,20 @@ def validar_y_consumir_cupon(codigo_ingresado):
                         sheet_cupones.update_cell(idx, 8, "Agotado")
                         return False, "❌ Este cupón ya alcanzó su límite máximo de usos."
 
+                    tipo_desc = safe_get(row, "Tipo", "Fijo").strip()
+                    valor_raw = str(safe_get(row, "Valor", "0")).replace("$", "").replace("%", "").replace(",", ".").strip()
+                    try:
+                        valor_desc = float(valor_raw)
+                    except ValueError:
+                        valor_desc = 0.0
+
+                    if valor_desc <= 0:
+                        return False, "❌ El cupón tiene un valor de descuento inválido (0)."
+
                     sheet_cupones.update_cell(idx, 7, veces_usado + 1)
                     if (veces_usado + 1) >= usos_max and duracion_horas == 0:
                         sheet_cupones.update_cell(idx, 8, "Agotado")
 
-                    tipo_desc = safe_get(row, "Tipo", "Fijo")
-                    valor_desc = float(safe_get(row, "Valor", "0"))
                     return True, {"tipo": tipo_desc, "valor": valor_desc, "codigo": codigo_db}
 
             return False, "❌ El código de cupón ingresado es inválido."
@@ -634,7 +641,6 @@ def aprobar_suscripcion_sheet(row_idx):
         if estado_actual == "activo":
             return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
 
-        # Detecta si ya tenía una fecha de vencimiento de 10 caracteres (YYYY-MM-DD, DD/MM/YYYY o DD-MM-YYYY)
         fecha_previa = None
         if timestamp_orden and len(timestamp_orden) == 10:
             for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
@@ -690,7 +696,6 @@ def aprobar_suscripcion_sheet(row_idx):
                     sheet.update_cell(row_idx, 3, cuenta_fila)
 
         hoy = obtener_hora_venezuela().date()
-        # Si es renovación y su fecha anterior aún no ha vencido, sumamos 30 días a esa fecha
         if es_renovacion and fecha_previa > hoy:
             fecha_base = fecha_previa
         else:
