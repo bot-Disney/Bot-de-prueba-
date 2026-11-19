@@ -19,8 +19,24 @@ app = FastAPI()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "TU_TOKEN_DE_TELEGRAM")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Diccionario temporal para prevenir doble clic / spam de botones
+# Diccionario temporal para prevenir doble clic / spam de botones en Telegram
 clics_procesados = {}
+
+# Diccionario temporal para mapear opciones numeradas de WhatsApp -> callback_data
+menus_whatsapp_activos = {}
+
+
+# =============================================================
+# ENVÍO INTELIGENTE (DETECTA SI ES TELEGRAM O WHATSAPP)
+# =============================================================
+def enviar_mensaje_unificado(chat_id, texto, teclado=None):
+    """Enruta el mensaje hacia WhatsApp o Telegram según el formato del ID."""
+    str_id = str(chat_id).strip()
+    # Los números de WhatsApp incluyen código de país (ej: 58424...) y suelen tener 11+ dígitos
+    if str_id.isdigit() and len(str_id) >= 11:
+        enviar_mensaje_whatsapp_wrapper(str_id, texto, teclado)
+    else:
+        enviar_mensaje_telegram(chat_id, texto, teclado)
 
 
 # =============================================================
@@ -55,7 +71,7 @@ def iniciar_vigilante_pagos_pendientes():
                                     srv_vencido = safe_get(row, "Servicio", "Streaming")
 
                                     limpiar_fila_cancelada_o_renovacion(idx)
-                                    print(f"🧹 Fila {idx} liberada automáticamente tras superar 30 minutos sin reporte de pago.")
+                                    print(f"🧹 Fila {idx} liberada automáticamente tras superar 30 minutos sin reporte de pago.", flush=True)
 
                                     if tid_cliente:
                                         try:
@@ -64,19 +80,19 @@ def iniciar_vigilante_pagos_pendientes():
                                                 f"Tu orden pendiente para *{srv_vencido}* ha expirado al superarse los 30 minutos sin reportar pago.\n"
                                                 "Tu cupo ha sido liberado. Cuando gustes, puedes generar una nueva solicitud desde el menú."
                                             )
-                                            enviar_mensaje_telegram(int(tid_cliente), msg_vencido)
+                                            enviar_mensaje_unificado(tid_cliente, msg_vencido)
                                         except Exception:
                                             pass
                             except ValueError:
                                 pass
             except Exception as e:
-                print(f"Error en el hilo vigilante de pagos de 30 min: {e}")
+                print(f"Error en el hilo vigilante de pagos de 30 min: {e}", flush=True)
 
             time.sleep(120)
 
     hilo_v = threading.Thread(target=bucle_vigilante, daemon=True)
     hilo_v.start()
-    print("🛡️ Vigilante automático de 30 minutos para pagos pendientes iniciado en segundo plano.")
+    print("🛡️ Vigilante automático de 30 minutos para pagos pendientes iniciado en segundo plano.", flush=True)
 
 
 # =============================================================
@@ -88,20 +104,20 @@ def iniciar_reloj_alertas():
         time.sleep(30)
         while True:
             try:
-                print("⏰ Ejecutando revisión automática diaria de vencimientos...")
-                revisar_y_enviar_alertas_vencimiento(enviar_mensaje_telegram)
+                print("⏰ Ejecutando revisión automática diaria de vencimientos...", flush=True)
+                revisar_y_enviar_alertas_vencimiento(enviar_mensaje_unificado)
             except Exception as e:
-                print(f"Error en el bucle automático de alertas: {e}")
+                print(f"Error en el bucle automático de alertas: {e}", flush=True)
             time.sleep(86400)
 
     hilo = threading.Thread(target=bucle_diario, daemon=True)
     hilo.start()
-    print("🚀 Reloj automático de alertas diarias iniciado correctamente en segundo plano.")
+    print("🚀 Reloj automático de alertas diarias iniciado correctamente en segundo plano.", flush=True)
 
 
 @app.on_event("startup")
 def startup_event():
-    print("¡El servidor, el lector de Gmail y el bot interactivo se han iniciado en Render!")
+    print("¡El servidor, el lector de Gmail y el bot interactivo se han iniciado en Render!", flush=True)
     iniciar_reloj_alertas()
     iniciar_vigilante_pagos_pendientes()
 
@@ -131,10 +147,10 @@ def verificar_webhook_whatsapp(request: Request):
 
 @app.post("/webhook/whatsapp")
 async def recibir_mensaje_whatsapp(request: Request):
-    """Recibe mensajes de texto enviados por los clientes a través de WhatsApp y los enruta al cerebro del bot."""
+    """Recibe mensajes enviados por los clientes en WhatsApp y los enruta al cerebro del bot."""
     try:
         body = await request.json()
-        print(f"📥 Webhook de WhatsApp recibido: {body}")
+        print(f"📥 Webhook de WhatsApp recibido: {body}", flush=True)
 
         entry = body.get("entry", [])
         if not entry:
@@ -149,37 +165,84 @@ async def recibir_mensaje_whatsapp(request: Request):
 
         if messages:
             msg = messages[0]
-            remitente = msg.get("from")  # Número de teléfono de WhatsApp del cliente (Ej: 58424...)
+            remitente = str(msg.get("from", "")).strip()
             tipo_msg = msg.get("type")
 
-            # Obtenemos el nombre del contacto si viene en el payload de Meta
             contacts = value.get("contacts", [])
             nombre_cliente = "Cliente WhatsApp"
             if contacts:
                 nombre_cliente = contacts[0].get("profile", {}).get("name", "Cliente WhatsApp")
 
             if tipo_msg == "text":
-                texto_texto = msg.get("text", {}).get("body", "").strip()
-                print(f"💬 Mensaje de {remitente} ({nombre_cliente}): {texto_texto}")
-                
-                # Enrutamos directamente al cerebro principal del bot unificado
-                procesar_mensaje_bot(
-                    chat_id=remitente,
-                    texto=texto_texto,
-                    nombre=nombre_cliente,
-                    username="",
-                    enviar_mensaje_callback=enviar_mensaje_whatsapp_wrapper,
-                )
+                texto_usuario = msg.get("text", {}).get("body", "").strip()
+                print(f"💬 Mensaje de {remitente} ({nombre_cliente}): {texto_usuario}", flush=True)
+
+                # Comprobar si el usuario respondió con un número de un menú activo
+                opciones_usuario = menus_whatsapp_activos.get(remitente, {})
+                if texto_usuario in opciones_usuario:
+                    accion_elegida = opciones_usuario[texto_usuario]
+
+                    if accion_elegida.startswith("http"):
+                        enviar_mensaje_whatsapp(remitente, f"🔗 Abre este enlace para continuar:\n{accion_elegida}")
+                    else:
+                        procesar_mensaje_bot(
+                            chat_id=remitente,
+                            texto="",
+                            nombre=nombre_cliente,
+                            username="",
+                            enviar_mensaje_callback=enviar_mensaje_unificado,
+                            es_callback=True,
+                            callback_data=accion_elegida,
+                        )
+                else:
+                    # Flujo normal de texto (ej: "Hola", escribir código de cupón, nuevo nombre, etc.)
+                    procesar_mensaje_bot(
+                        chat_id=remitente,
+                        texto=texto_usuario,
+                        nombre=nombre_cliente,
+                        username="",
+                        enviar_mensaje_callback=enviar_mensaje_unificado,
+                    )
 
         return {"status": "success"}
     except Exception as e:
-        print(f"❌ Error procesando webhook de WhatsApp: {e}")
+        print(f"❌ Error procesando webhook de WhatsApp: {e}", flush=True)
         return {"status": "error"}
 
 
 def enviar_mensaje_whatsapp_wrapper(chat_id, texto, teclado=None):
-    """Función puente para adaptar el envío de mensajes de texto hacia WhatsApp."""
-    enviar_mensaje_whatsapp(chat_id, texto)
+    """Convierte mensajes y teclados de Telegram en texto con opciones numeradas para WhatsApp."""
+    str_id = str(chat_id).strip()
+    texto_final = texto
+
+    if teclado and isinstance(teclado, dict) and "inline_keyboard" in teclado:
+        opciones_mapa = {}
+        lineas_opciones = []
+        contador = 1
+
+        for fila in teclado["inline_keyboard"]:
+            for boton in fila:
+                etiqueta = boton.get("text", "").strip()
+                cb_data = boton.get("callback_data")
+                url_btn = boton.get("url")
+
+                if cb_data:
+                    opciones_mapa[str(contador)] = cb_data
+                    lineas_opciones.append(f"*{contador}.* {etiqueta}")
+                    contador += 1
+                elif url_btn:
+                    opciones_mapa[str(contador)] = url_btn
+                    lineas_opciones.append(f"*{contador}.* {etiqueta}")
+                    contador += 1
+
+        if lineas_opciones:
+            menus_whatsapp_activos[str_id] = opciones_mapa
+            texto_final += "\n\n" + "\n".join(lineas_opciones) + "\n\n_Responde con el número de la opción que deseas._"
+    else:
+        # Si el bot solicita escribir un dato libre (cupón, nombre, etc.), limpiamos el menú previo
+        menus_whatsapp_activos.pop(str_id, None)
+
+    enviar_mensaje_whatsapp(str_id, texto_final)
 
 
 # =============================================================
@@ -225,7 +288,7 @@ async def recibir_webhook(request: Request):
                 texto="",
                 nombre=nombre,
                 username=username,
-                enviar_mensaje_callback=enviar_mensaje_telegram,
+                enviar_mensaje_callback=enviar_mensaje_unificado,
                 editar_mensaje_callback=editar_mensaje_telegram,
                 message_id=message_id,
                 es_callback=True,
@@ -245,7 +308,7 @@ async def recibir_webhook(request: Request):
                 texto="",
                 nombre=nombre,
                 username=username,
-                enviar_mensaje_callback=enviar_mensaje_telegram,
+                enviar_mensaje_callback=enviar_mensaje_unificado,
                 photo_file_id=photo_file_id,
                 enviar_foto_callback=enviar_foto_telegram,
             )
@@ -263,14 +326,14 @@ async def recibir_webhook(request: Request):
                 texto=texto,
                 nombre=nombre,
                 username=username,
-                enviar_mensaje_callback=enviar_mensaje_telegram,
+                enviar_mensaje_callback=enviar_mensaje_unificado,
                 enviar_foto_callback=enviar_foto_telegram,
             )
 
         return {"status": "ok"}
 
     except Exception as e:
-        print(f"Error procesando el webhook: {e}")
+        print(f"Error procesando el webhook: {e}", flush=True)
         return {"status": "error", "message": str(e)}
 
 
@@ -287,7 +350,7 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Error enviando mensaje a Telegram: {e}")
+        print(f"Error enviando mensaje a Telegram: {e}", flush=True)
 
 
 def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
@@ -304,7 +367,7 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Error enviando foto a Telegram: {e}")
+        print(f"Error enviando foto a Telegram: {e}", flush=True)
 
 
 def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
@@ -324,7 +387,7 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
         if not res_json.get("ok"):
             enviar_mensaje_telegram(chat_id, texto, teclado)
     except Exception as e:
-        print(f"Error editando mensaje en Telegram: {e}")
+        print(f"Error editando mensaje en Telegram: {e}", flush=True)
 
 
 def responder_callback_telegram(callback_id, texto_alerta=""):
@@ -337,7 +400,7 @@ def responder_callback_telegram(callback_id, texto_alerta=""):
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print(f"Error respondiendo callback: {e}")
+        print(f"Error respondiendo callback: {e}", flush=True)
 
 
 if __name__ == "__main__":
