@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import datetime
 import threading
@@ -12,7 +13,7 @@ from bot_logic import (
     obtener_hora_venezuela,
 )
 from alertas import revisar_y_enviar_alertas_vencimiento
-from whatsapp_api import enviar_mensaje_whatsapp
+from whatsapp_api import enviar_mensaje_whatsapp, descargar_media_whatsapp
 
 app = FastAPI()
 
@@ -147,7 +148,7 @@ def verificar_webhook_whatsapp(request: Request):
 
 @app.post("/webhook/whatsapp")
 async def recibir_mensaje_whatsapp(request: Request):
-    """Recibe mensajes enviados por los clientes en WhatsApp y los enruta al cerebro del bot."""
+    """Recibe mensajes de texto e imágenes enviados por los clientes en WhatsApp y los enruta al cerebro del bot."""
     try:
         body = await request.json()
         print(f"📥 Webhook de WhatsApp recibido: {body}", flush=True)
@@ -193,6 +194,7 @@ async def recibir_mensaje_whatsapp(request: Request):
                             enviar_mensaje_callback=enviar_mensaje_unificado,
                             es_callback=True,
                             callback_data=accion_elegida,
+                            enviar_foto_callback=enviar_foto_telegram,
                         )
                 else:
                     # Flujo normal de texto (ej: "Hola", escribir código de cupón, nuevo nombre, etc.)
@@ -202,6 +204,29 @@ async def recibir_mensaje_whatsapp(request: Request):
                         nombre=nombre_cliente,
                         username="",
                         enviar_mensaje_callback=enviar_mensaje_unificado,
+                        enviar_foto_callback=enviar_foto_telegram,
+                    )
+
+            elif tipo_msg == "image":
+                media_id = msg.get("image", {}).get("id")
+                caption_img = msg.get("image", {}).get("caption", "").strip()
+                print(f"📸 Imagen recibida de {remitente} ({nombre_cliente}) - media_id: {media_id}", flush=True)
+
+                bytes_imagen = descargar_media_whatsapp(media_id) if media_id else None
+                if bytes_imagen:
+                    procesar_mensaje_bot(
+                        chat_id=remitente,
+                        texto=caption_img,
+                        nombre=nombre_cliente,
+                        username="",
+                        enviar_mensaje_callback=enviar_mensaje_unificado,
+                        photo_file_id=bytes_imagen,
+                        enviar_foto_callback=enviar_foto_telegram,
+                    )
+                else:
+                    enviar_mensaje_whatsapp(
+                        remitente,
+                        "⚠️ No pudimos procesar la imagen recibida. Por favor, intenta enviarla nuevamente o escribe los datos de tu referencia."
                     )
 
         return {"status": "success"}
@@ -354,18 +379,29 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
 
 
 def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
-    """Reenvía una foto (captura de pago) con texto y botones al chat (ej: al Admin)."""
+    """Reenvía una foto (por file_id de Telegram o bytes descargados de WhatsApp) al Admin."""
     url = f"{TELEGRAM_API_URL}/sendPhoto"
-    payload = {
-        "chat_id": chat_id,
-        "photo": photo_file_id,
-        "caption": caption,
-        "parse_mode": "Markdown",
-    }
-    if teclado:
-        payload["reply_markup"] = teclado
     try:
-        requests.post(url, json=payload)
+        if isinstance(photo_file_id, bytes):
+            data = {
+                "chat_id": chat_id,
+                "caption": caption,
+                "parse_mode": "Markdown",
+            }
+            if teclado:
+                data["reply_markup"] = json.dumps(teclado)
+            files = {"photo": ("comprobante_whatsapp.jpg", photo_file_id, "image/jpeg")}
+            requests.post(url, data=data, files=files)
+        else:
+            payload = {
+                "chat_id": chat_id,
+                "photo": photo_file_id,
+                "caption": caption,
+                "parse_mode": "Markdown",
+            }
+            if teclado:
+                payload["reply_markup"] = teclado
+            requests.post(url, json=payload)
     except Exception as e:
         print(f"Error enviando foto a Telegram: {e}", flush=True)
 
