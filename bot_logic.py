@@ -317,7 +317,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
             srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
             
-            tipo_op = "renovacion" if safe_get(fila_obj, "Vencimiento", "") != "" else "nueva"
+            venc_previo = safe_get(fila_obj, "Vencimiento", "").strip()
+            tipo_op = "renovacion" if (venc_previo and len(venc_previo) == 10 and ("-" in venc_previo or "/" in venc_previo)) else "nueva"
 
             iniciar_proceso_pago_con_descuento(
                 chat_id, str_chat_id, nombre, username, srv_clave, tipo_op, 
@@ -1798,9 +1799,19 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     elif accion.startswith("usar_cupon_"):
         try:
             row_idx_target = int(accion.split("_")[-1])
+            sheet = conectar_sheets()
+            registros = sheet.get_all_records()
+            fila_obj = registros[row_idx_target - 2] if (row_idx_target - 2) < len(registros) else {}
+
+            srv_nombre = safe_get(fila_obj, "Servicio", "Disney+").lower()
+            srv_clave = "netflix" if "netflix" in srv_nombre else "disney"
+
+            venc_previo = safe_get(fila_obj, "Vencimiento", "").strip()
+            tipo_op_actual = "renovacion" if (venc_previo and len(venc_previo) == 10 and ("-" in venc_previo or "/" in venc_previo)) else "nueva"
+
             esperando_codigo_cupon_cliente[str_chat_id] = {
-                "servicio_clave": "netflix" if "netflix" in accion else "disney",
-                "tipo_operacion": "renovacion",
+                "servicio_clave": srv_clave,
+                "tipo_operacion": tipo_op_actual,
                 "row_idx_target": row_idx_target,
                 "message_id": message_id
             }
