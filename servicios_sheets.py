@@ -220,10 +220,10 @@ def limpiar_fila_cancelada_o_renovacion(row_idx):
             return
 
         estado_actual = safe_get({"Estado": fila_datos[5]}, "Estado", "").lower()
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
+        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "").strip()
 
         if "pendiente" in estado_actual:
-            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
+            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and len(vencimiento_actual) == 10 and ("-" in vencimiento_actual or "/" in vencimiento_actual):
                 sheet_principal.update_cell(row_idx, 6, "Activo")
                 print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
             else:
@@ -257,9 +257,9 @@ def rechazar_pago_seguro(row_idx):
         if len(fila_datos) < 6:
             return "Fila no encontrada."
 
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "")
+        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "").strip()
 
-        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and "-" in vencimiento_actual and len(vencimiento_actual) == 10:
+        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and len(vencimiento_actual) == 10 and ("-" in vencimiento_actual or "/" in vencimiento_actual):
             sheet_principal.update_cell(row_idx, 6, "Activo")
             return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
         else:
@@ -628,13 +628,23 @@ def aprobar_suscripcion_sheet(row_idx):
         servicio_fila = safe_get(fila_actual, "Servicio", "Disney+")
         perfil_asignado = safe_get(fila_actual, "Pantalla", "Perfil 1")
         cuenta_fila = safe_get(fila_actual, "Cuenta", "Por Asignar")
-        timestamp_orden = safe_get(fila_actual, "Vencimiento", "")
+        timestamp_orden = safe_get(fila_actual, "Vencimiento", "").strip()
         estado_actual = safe_get(fila_actual, "Estado", "").lower()
 
         if estado_actual == "activo":
             return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
 
-        es_renovacion = (timestamp_orden and "-" in timestamp_orden and len(timestamp_orden) == 10 and len(timestamp_orden.split("-")) == 3)
+        # Detecta si ya tenía una fecha de vencimiento de 10 caracteres (YYYY-MM-DD, DD/MM/YYYY o DD-MM-YYYY)
+        fecha_previa = None
+        if timestamp_orden and len(timestamp_orden) == 10:
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                try:
+                    fecha_previa = datetime.datetime.strptime(timestamp_orden, fmt).date()
+                    break
+                except ValueError:
+                    continue
+
+        es_renovacion = (fecha_previa is not None)
         tipo_operacion = "Renovación" if es_renovacion else "Pantalla Nueva"
 
         if not es_renovacion:
@@ -679,7 +689,13 @@ def aprobar_suscripcion_sheet(row_idx):
                     cuenta_fila = "⚠️ Pendiente de Stock"
                     sheet.update_cell(row_idx, 3, cuenta_fila)
 
-        fecha_base = obtener_hora_venezuela().date()
+        hoy = obtener_hora_venezuela().date()
+        # Si es renovación y su fecha anterior aún no ha vencido, sumamos 30 días a esa fecha
+        if es_renovacion and fecha_previa > hoy:
+            fecha_base = fecha_previa
+        else:
+            fecha_base = hoy
+
         nueva_fecha = (fecha_base + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
         
         sheet.update_cell(row_idx, 5, nueva_fecha)
