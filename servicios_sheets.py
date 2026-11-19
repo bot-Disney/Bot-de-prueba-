@@ -11,6 +11,15 @@ from config_y_estado import (
 )
 from teclados import get_main_menu_keyboard, get_back_keyboard
 
+
+def normalizar_id(valor):
+    """Limpia IDs de Telegram o números de WhatsApp (quita espacios, '+', y '.0' de Sheets)."""
+    s = str(valor or "").strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s.lstrip("+").strip()
+
+
 def existen_cupones_activos():
     """Verifica si hay al menos un cupón activo y vigente en Google Sheets."""
     try:
@@ -436,7 +445,7 @@ def procesar_asignacion_stock_masivo(enviar_msg_cb):
                                 f"{aviso_tv_especial}\n\n"
                                 "Puedes ingresar al bot y presionar **📲 Ver mis datos / pantallas** para consultar los detalles completos de tu acceso."
                             )
-                            enviar_msg_cb(int(tid_cliente), mensaje_notif, get_main_menu_keyboard())
+                            enviar_msg_cb(normalizar_id(tid_cliente), mensaje_notif, get_main_menu_keyboard())
                         except Exception as e:
                             print(f"No se pudo notificar al cliente {tid_cliente}: {e}")
 
@@ -457,11 +466,11 @@ def obtener_suscripciones_por_id(chat_id):
     try:
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
-        str_chat_id = str(chat_id).strip()
+        id_buscado = normalizar_id(chat_id)
         resultados = []
         for idx, r in enumerate(registros, start=2):
-            tid = safe_get(r, "Telegram_ID", "")
-            if tid == str_chat_id:
+            tid = normalizar_id(safe_get(r, "Telegram_ID", ""))
+            if tid and tid == id_buscado:
                 r["_row_index"] = idx
                 resultados.append(r)
         return resultados
@@ -475,19 +484,20 @@ def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disne
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
         nombre_completo = f"{nombre} (@{username})" if username else nombre
+        id_limpio = normalizar_id(str_chat_id)
 
         for idx, r in enumerate(registros, start=2):
-            tid = safe_get(r, "Telegram_ID", "")
+            tid = normalizar_id(safe_get(r, "Telegram_ID", ""))
             estado = safe_get(r, "Estado", "").lower()
             srv = safe_get(r, "Servicio", "").lower()
             
-            if tid == str_chat_id and "pendiente" in estado and servicio.lower() in srv:
+            if tid == id_limpio and "pendiente" in estado and servicio.lower() in srv:
                 return idx
 
-        correo_asignado = asignar_correo_desde_stock(sheet, servicio, str_chat_id, nombre_completo, enviar_mensaje_cb)
+        correo_asignado = asignar_correo_desde_stock(sheet, servicio, id_limpio, nombre_completo, enviar_mensaje_cb)
         perfil_asignado = obtener_primer_perfil_disponible(sheet, servicio, correo_asignado)
         
-        sheet.append_row([str(str_chat_id), nombre_completo, correo_asignado, perfil_asignado, "", "Pendiente Pago", servicio])
+        sheet.append_row([id_limpio, nombre_completo, correo_asignado, perfil_asignado, "", "Pendiente Pago", servicio])
         return len(sheet.get_all_records()) + 1
     except Exception as e:
         print(f"Error creando fila nueva: {e}")
