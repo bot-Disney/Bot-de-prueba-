@@ -26,6 +26,9 @@ clics_procesados = {}
 # Diccionario temporal para mapear opciones numeradas de WhatsApp -> callback_data
 menus_whatsapp_activos = {}
 
+# Diccionario temporal para evitar reprocesar reintentos de Meta (mismo wamid)
+mensajes_whatsapp_procesados = {}
+
 
 # =============================================================
 # ENVÍO INTELIGENTE (DETECTA SI ES TELEGRAM O WHATSAPP)
@@ -174,6 +177,29 @@ def verificar_webhook_whatsapp(request: Request):
     return Response(status_code=400)
 
 
+def _procesar_imagen_whatsapp_en_segundo_plano(remitente, nombre_cliente, media_id, caption_img):
+    """Descarga la imagen de WhatsApp y ejecuta el flujo del bot en un hilo separado."""
+    try:
+        bytes_imagen = descargar_media_whatsapp(media_id) if media_id else None
+        if bytes_imagen:
+            procesar_mensaje_bot(
+                chat_id=remitente,
+                texto=caption_img,
+                nombre=nombre_cliente,
+                username="",
+                enviar_mensaje_callback=enviar_mensaje_unificado,
+                photo_file_id=bytes_imagen,
+                enviar_foto_callback=enviar_foto_telegram,
+            )
+        else:
+            enviar_mensaje_whatsapp(
+                remitente,
+                "⚠️ No pudimos procesar la imagen recibida. Por favor, intenta enviarla nuevamente o escribe los datos de tu referencia.",
+            )
+    except Exception as exc_img:
+        print(f"❌ Error en hilo de imagen de WhatsApp ({remitente}): {exc_img}", flush=True)
+
+
 @app.post("/webhook/whatsapp")
 async def recibir_mensaje_whatsapp(request: Request):
     """Recibe mensajes de texto e imágenes enviados por los clientes en WhatsApp y los enruta al cerebro del bot."""
@@ -236,26 +262,31 @@ async def recibir_mensaje_whatsapp(request: Request):
                     )
 
             elif tipo_msg == "image":
+                wamid = str(msg.get("id", "")).strip()
+                ahora_w = time.time()
+
+                # Limpieza periódica de IDs viejos (más de 10 minutos)
+                if len(mensajes_whatsapp_procesados) > 300:
+                    for k, t in list(mensajes_whatsapp_procesados.items()):
+                        if ahora_w - t > 600:
+                            mensajes_whatsapp_procesados.pop(k, None)
+
+                if wamid and wamid in mensajes_whatsapp_procesados:
+                    print(f"♻️ Reintento de imagen ignorado (wamid ya procesado): {wamid}", flush=True)
+                    return {"status": "duplicate_ignored"}
+
+                if wamid:
+                    mensajes_whatsapp_procesados[wamid] = ahora_w
+
                 media_id = msg.get("image", {}).get("id")
                 caption_img = msg.get("image", {}).get("caption", "").strip()
                 print(f"📸 Imagen recibida de {remitente} ({nombre_cliente}) - media_id: {media_id}", flush=True)
 
-                bytes_imagen = descargar_media_whatsapp(media_id) if media_id else None
-                if bytes_imagen:
-                    procesar_mensaje_bot(
-                        chat_id=remitente,
-                        texto=caption_img,
-                        nombre=nombre_cliente,
-                        username="",
-                        enviar_mensaje_callback=enviar_mensaje_unificado,
-                        photo_file_id=bytes_imagen,
-                        enviar_foto_callback=enviar_foto_telegram,
-                    )
-                else:
-                    enviar_mensaje_whatsapp(
-                        remitente,
-                        "⚠️ No pudimos procesar la imagen recibida. Por favor, intenta enviarla nuevamente o escribe los datos de tu referencia."
-                    )
+                threading.Thread(
+                    target=_procesar_imagen_whatsapp_en_segundo_plano,
+                    args=(remitente, nombre_cliente, media_id, caption_img),
+                    daemon=True,
+                ).start()
 
         return {"status": "success"}
     except Exception as e:
@@ -402,7 +433,9 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
     if teclado:
         payload["reply_markup"] = teclado
     try:
-        requests.post(url, json=payload)
+        res = requests.post(url, json=payload, timeout=15)
+        if not res.ok:
+            print(f"⚠️ Telegram sendMessage respondió {res.status_code}: {res.text}", flush=True)
     except Exception as e:
         print(f"Error enviando mensaje a Telegram: {e}", flush=True)
 
@@ -420,7 +453,7 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
             if teclado:
                 data["reply_markup"] = json.dumps(teclado)
             files = {"photo": ("comprobante_whatsapp.jpg", photo_file_id, "image/jpeg")}
-            requests.post(url, data=data, files=files)
+            res = requests.post(url, data=data, files=files, timeout=15)
         else:
             payload = {
                 "chat_id": chat_id,
@@ -430,7 +463,10 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
             }
             if teclado:
                 payload["reply_markup"] = teclado
-            requests.post(url, json=payload)
+            res = requests.post(url, json=payload, timeout=15)
+
+        if not res.ok:
+            print(f"⚠️ Telegram sendPhoto respondió {res.status_code}: {res.text}", flush=True)
     except Exception as e:
         print(f"Error enviando foto a Telegram: {e}", flush=True)
 
@@ -447,7 +483,7 @@ def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
     if teclado:
         payload["reply_markup"] = teclado
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=15)
         res_json = response.json()
         if not res_json.get("ok"):
             enviar_mensaje_telegram(chat_id, texto, teclado)
@@ -463,7 +499,7 @@ def responder_callback_telegram(callback_id, texto_alerta=""):
         payload["text"] = texto_alerta
         payload["show_alert"] = False
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Error respondiendo callback: {e}", flush=True)
 
