@@ -116,9 +116,37 @@ def iniciar_reloj_alertas():
     print("🚀 Reloj automático de alertas diarias iniciado correctamente en segundo plano.", flush=True)
 
 
+def configurar_webhook_automatico():
+    """Registra o actualiza el webhook de Telegram al arrancar el servicio en Render."""
+    base_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    if not base_url:
+        print("⚠️ RENDER_EXTERNAL_URL no está disponible; se omite el registro automático del webhook.", flush=True)
+        return
+
+    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "TU_TOKEN_DE_TELEGRAM":
+        print("⚠️ TELEGRAM_TOKEN no está configurado; se omite el registro automático del webhook.", flush=True)
+        return
+
+    webhook_url = f"{base_url}/webhook"
+    try:
+        res = requests.post(
+            f"{TELEGRAM_API_URL}/setWebhook",
+            json={"url": webhook_url},
+            timeout=10,
+        )
+        data_res = res.json()
+        if data_res.get("ok"):
+            print(f"✅ Webhook de Telegram sincronizado automáticamente: {webhook_url}", flush=True)
+        else:
+            print(f"⚠️ Telegram respondió al setWebhook con error: {data_res}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Error al registrar el webhook automáticamente al iniciar: {e}", flush=True)
+
+
 @app.on_event("startup")
 def startup_event():
     print("¡El servidor, el lector de Gmail y el bot interactivo se han iniciado en Render!", flush=True)
+    configurar_webhook_automatico()
     iniciar_reloj_alertas()
     iniciar_vigilante_pagos_pendientes()
 
@@ -318,6 +346,7 @@ async def recibir_webhook(request: Request):
                 message_id=message_id,
                 es_callback=True,
                 callback_data=callback_data,
+                enviar_foto_callback=enviar_foto_telegram,
             )
 
         # 2. Si el usuario envió una FOTO / CAPTURA DE PANTALLA
