@@ -20,6 +20,20 @@ def normalizar_id(valor):
     return s.lstrip("+").strip()
 
 
+def es_fecha_vencimiento_valida(valor_str):
+    """Devuelve True si el texto es una fecha de vencimiento real (10 chars), no un timestamp de orden."""
+    v = str(valor_str or "").strip()
+    if not v or v.lower() in ("sin fecha", "none") or len(v) != 10:
+        return False
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            datetime.datetime.strptime(v, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def existen_cupones_activos():
     """Verifica si hay al menos un cupón activo y vigente en Google Sheets."""
     try:
@@ -219,42 +233,111 @@ def obtener_pin_asignado_cliente(correo_cuenta, nombre_perfil):
         return "S/N"
 
 
-def limpiar_fila_cancelada_o_renovacion(row_idx):
+def _liberar_cupo_cuenta(sheet_principal, correo_a_liberar):
+    """Resta 1 perfil ocupado en la hoja Cuentas y reactiva si estaba Llena."""
+    if not correo_a_liberar or "pendiente" in correo_a_liberar.lower() or "asignar" in correo_a_liberar.lower():
+        return
     try:
-        sheet_principal = conectar_sheets()
-        fila_datos = sheet_principal.row_values(row_idx)
-        if len(fila_datos) < 6:
-            return
-
-        estado_actual = safe_get({"Estado": fila_datos[5]}, "Estado", "").lower()
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "").strip()
-
-        if "pendiente" in estado_actual:
-            if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and len(vencimiento_actual) == 10 and ("-" in vencimiento_actual or "/" in vencimiento_actual):
-                sheet_principal.update_cell(row_idx, 6, "Activo")
-                print(f"Renovación cancelada en fila {row_idx}. Estado restaurado a Activo.")
-            else:
-                correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
-                if correo_a_liberar and "pendiente de stock" not in correo_a_liberar.lower():
-                    try:
-                        spreadsheet = sheet_principal.spreadsheet
-                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                        registros_cuentas = sheet_cuentas.get_all_records()
-                        for idx_c, c_row in enumerate(registros_cuentas, start=2):
-                            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
-                            if correo_cta.lower() == correo_a_liberar.lower():
-                                ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                                nuevos_ocupados = max(0, ocupados - 1)
-                                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-                                if safe_get(c_row, "Estado", "").lower() == "llena":
-                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                                break
-                    except Exception as e:
-                        print(f"Aviso al liberar stock en cancelación: {e}")
-                sheet_principal.delete_rows(row_idx)
-                print(f"Fila nueva {row_idx} eliminada por cancelación.")
+        spreadsheet = sheet_principal.spreadsheet
+        sheet_cuentas = spreadsheet.worksheet("Cuentas")
+        registros_cuentas = sheet_cuentas.get_all_records()
+        for idx_c, c_row in enumerate(registros_cuentas, start=2):
+            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
+            if correo_cta.lower() == correo_a_liberar.lower():
+                try:
+                    ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
+                except ValueError:
+                    ocupados = 1
+                nuevos_ocupados = max(0, ocupados - 1)
+                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
+                if safe_get(c_row, "Estado", "").lower() == "llena":
+                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
+                break
     except Exception as e:
-        print(f"Error en limpieza segura de fila: {e}")
+        print(f"Aviso al liberar stock en cancelación: {e}")
+
+
+def limpiar_fila_cancelada_o_renovacion(row_idx, chat_id_respaldo=None):
+    """
+    Si el usuario cancela el pago:
+    - Si es Renovación (tiene fecha de vencimiento previa): la restaura a 'Activo' sin perder sus días.
+    - Si es Pantalla Nueva (sin fecha de vencimiento previa): libera el cupo en 'Cuentas' y borra la fila.
+    También revisa filas pendientes del usuario en Sheets por si se reinició la memoria del servidor.
+    """
+    with candado_operaciones:
+        try:
+            sheet_principal = conectar_sheets()
+            filas_a_revisar = set()
+
+            if row_idx and isinstance(row_idx, int) and row_idx >= 2:
+                filas_a_revisar.add(row_idx)
+
+            if chat_id_respaldo:
+                id_limpio = normalizar_id(chat_id_respaldo)
+                registros = sheet_principal.get_all_records()
+                for idx, r in enumerate(registros, start=2):
+                    if normalizar_id(safe_get(r, "Telegram_ID", "")) == id_limpio:
+                        if "pendiente" in safe_get(r, "Estado", "").lower():
+                            filas_a_revisar.add(idx)
+
+            # Procesamos de abajo hacia arriba para que al borrar filas no se corran los índices superiores
+            for r_idx in sorted(filas_a_revisar, reverse=True):
+                fila_datos = sheet_principal.row_values(r_idx)
+                if len(fila_datos) < 6:
+                    continue
+
+                estado_actual = str(fila_datos[5]).strip().lower()
+                vencimiento_actual = str(fila_datos[4]).strip()
+
+                if "pendiente" in estado_actual:
+                    if es_fecha_vencimiento_valida(vencimiento_actual):
+                        sheet_principal.update_cell(r_idx, 6, "Activo")
+                        print(f"Renovación cancelada en fila {r_idx}. Estado restaurado a Activo.")
+                    else:
+                        correo_a_liberar = str(fila_datos[2]).strip()
+                        _liberar_cupo_cuenta(sheet_principal, correo_a_liberar)
+                        sheet_principal.delete_rows(r_idx)
+                        print(f"Fila nueva {r_idx} eliminada y cupo liberado por cancelación.")
+        except Exception as e:
+            print(f"Error en limpieza segura de fila: {e}")
+
+
+def limpiar_ordenes_nuevas_expiradas(minutos_limite=30):
+    """
+    Depura automáticamente compras NUEVAS que quedaron congeladas en 'Pendiente Pago'
+    por más de `minutos_limite` minutos, liberando su cupo en Cuentas.
+    Respeta intactas todas las renovaciones.
+    """
+    with candado_operaciones:
+        try:
+            sheet_principal = conectar_sheets()
+            registros = sheet_principal.get_all_records()
+            ahora_local = obtener_hora_venezuela().replace(tzinfo=None)
+
+            for idx in range(len(registros) + 1, 1, -1):
+                row = registros[idx - 2]
+                estado = safe_get(row, "Estado", "").lower()
+                if "pendiente" not in estado:
+                    continue
+
+                venc_o_ts = safe_get(row, "Vencimiento", "").strip()
+                # Si es fecha de vencimiento real (10 chars), es renovación -> no tocar
+                if es_fecha_vencimiento_valida(venc_o_ts):
+                    continue
+
+                # Si tiene timestamp de orden (YYYY-MM-DD HH:MM:SS), verificar si venció el tiempo
+                if venc_o_ts:
+                    try:
+                        hora_orden = datetime.datetime.strptime(venc_o_ts, "%Y-%m-%d %H:%M:%S")
+                        if (ahora_local - hora_orden).total_seconds() / 60 > minutos_limite:
+                            correo_a_liberar = safe_get(row, "Cuenta", "")
+                            _liberar_cupo_cuenta(sheet_principal, correo_a_liberar)
+                            sheet_principal.delete_rows(idx)
+                            print(f"🧹 Orden nueva expirada (> {minutos_limite}m) eliminada en fila {idx}.")
+                    except ValueError:
+                        continue
+        except Exception as e:
+            print(f"Error limpiando órdenes expiradas: {e}")
 
 
 def rechazar_pago_seguro(row_idx):
@@ -264,13 +347,13 @@ def rechazar_pago_seguro(row_idx):
         if len(fila_datos) < 6:
             return "Fila no encontrada."
 
-        vencimiento_actual = safe_get({"Vencimiento": fila_datos[4]}, "Vencimiento", "").strip()
+        vencimiento_actual = str(fila_datos[4]).strip()
 
-        if vencimiento_actual and vencimiento_actual.lower() not in ("", "sin fecha") and len(vencimiento_actual) == 10 and ("-" in vencimiento_actual or "/" in vencimiento_actual):
+        if es_fecha_vencimiento_valida(vencimiento_actual):
             sheet_principal.update_cell(row_idx, 6, "Activo")
             return f"Pago de la fila {row_idx} rechazado. Como era una renovación, la suscripción se ha restaurado a Estado Activo sin perder sus días."
         else:
-            resultado = liberar_y_eliminar_fila_suscripcion(row_idx)
+            liberar_y_eliminar_fila_suscripcion(row_idx)
             return f"Pago de la fila {row_idx} rechazado. Fila eliminada y cupo liberado con éxito."
     except Exception as e:
         print(f"Error en rechazo seguro: {e}")
@@ -488,6 +571,7 @@ def obtener_suscripciones_por_id(chat_id):
 
 def crear_nueva_fila_pendiente(str_chat_id, nombre, username="", servicio="Disney", enviar_mensaje_cb=None):
     try:
+        limpiar_ordenes_nuevas_expiradas(30)
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
         nombre_completo = f"{nombre} (@{username})" if username else nombre
@@ -522,6 +606,7 @@ def verificar_cliente_activo(chat_id):
 
 def obtener_clientes_pendientes():
     try:
+        limpiar_ordenes_nuevas_expiradas(30)
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
         pendientes = []
@@ -581,43 +666,15 @@ def obtener_suscripciones_vencidas():
 def liberar_y_eliminar_fila_suscripcion(row_idx):
     try:
         sheet_principal = conectar_sheets()
-        spreadsheet = sheet_principal.spreadsheet
-        
-        try:
-            sheet_cuentas = spreadsheet.worksheet("Cuentas")
-        except Exception:
-            return "❌ No se encontró la pestaña 'Cuentas'."
-
         fila_datos = sheet_principal.row_values(row_idx)
         if len(fila_datos) < 3:
             return "❌ La fila seleccionada no es válida o está vacía."
 
-        correo_a_liberar = safe_get({"Cuenta": fila_datos[2]}, "Cuenta", "")
-        
-        registros_cuentas = sheet_cuentas.get_all_records()
-        cuenta_encontrada = False
-
-        for idx_c, c_row in enumerate(registros_cuentas, start=2):
-            correo_cta = safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", ""))
-            if correo_cta.lower() == correo_a_liberar.lower():
-                try:
-                    ocupados = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                except ValueError:
-                    ocupados = 1
-
-                nuevos_ocupados = max(0, ocupados - 1)
-                sheet_cuentas.update_cell(idx_c, 5, nuevos_ocupados)
-
-                estado_actual = safe_get(c_row, "Estado", "").lower()
-                if estado_actual == "llena":
-                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-
-                cuenta_encontrada = True
-                break
-
+        correo_a_liberar = str(fila_datos[2]).strip()
+        _liberar_cupo_cuenta(sheet_principal, correo_a_liberar)
         sheet_principal.delete_rows(row_idx)
 
-        msg_extra = " y se liberó un cupo en la cuenta maestra" if cuenta_encontrada else ""
+        msg_extra = " y se liberó un cupo en la cuenta maestra" if correo_a_liberar and "pendiente" not in correo_a_liberar.lower() else ""
         return f"✅ ¡Suscripción de la fila {row_idx} eliminada con éxito{msg_extra}!"
 
     except Exception as e:
@@ -642,7 +699,7 @@ def aprobar_suscripcion_sheet(row_idx):
             return True, tid_cliente, True, nombre_cliente, servicio_fila, perfil_asignado, "Renovación", cuenta_fila
 
         fecha_previa = None
-        if timestamp_orden and len(timestamp_orden) == 10:
+        if es_fecha_vencimiento_valida(timestamp_orden):
             for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
                 try:
                     fecha_previa = datetime.datetime.strptime(timestamp_orden, fmt).date()
@@ -669,21 +726,7 @@ def aprobar_suscripcion_sheet(row_idx):
 
             if tiempo_expirado:
                 print(f"⚠️ La orden de la fila {row_idx} superó los 30 minutos. Reasignando pantalla fresca...")
-                
-                if cuenta_fila and "pendiente" not in cuenta_fila.lower() and "asignar" not in cuenta_fila.lower():
-                    try:
-                        spreadsheet = sheet.spreadsheet
-                        sheet_cuentas = spreadsheet.worksheet("Cuentas")
-                        registros_c = sheet_cuentas.get_all_records()
-                        for idx_c, c_row in enumerate(registros_c, start=2):
-                            if safe_get(c_row, "Correo (Usuario)", safe_get(c_row, "Correo", "")).lower() == cuenta_fila.lower():
-                                ocu = int(safe_get(c_row, "Perfiles Ocupados", "1"))
-                                sheet_cuentas.update_cell(idx_c, 5, max(0, ocu - 1))
-                                if safe_get(c_row, "Estado", "").lower() == "llena":
-                                    sheet_cuentas.update_cell(idx_c, 6, "Activa")
-                                break
-                    except Exception as e:
-                        print(f"Aviso liberando cuenta expirada de 30 min: {e}")
+                _liberar_cupo_cuenta(sheet, cuenta_fila)
 
                 correo_fresco = asignar_correo_desde_stock(sheet, servicio_fila, tid_cliente, nombre_cliente)
                 if correo_fresco and "pendiente" not in correo_fresco.lower():
@@ -760,6 +803,7 @@ def verificar_alerta_vencimiento(vencimiento_str, estado_str):
 
 def generar_reporte_admin():
     try:
+        limpiar_ordenes_nuevas_expiradas(30)
         sheet = conectar_sheets()
         registros = sheet.get_all_records()
         activas = sum(1 for r in registros if safe_get(r, "Estado", "").lower() == "activo")
@@ -782,6 +826,7 @@ def generar_reporte_admin():
 
 def generar_resumen_completo_negocio():
     try:
+        limpiar_ordenes_nuevas_expiradas(30)
         sheet_principal = conectar_sheets()
         spreadsheet = sheet_principal.spreadsheet
         
