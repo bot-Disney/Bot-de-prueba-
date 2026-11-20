@@ -79,9 +79,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # CLIENTE: SOLICITAR REGISTRO MANUAL (PALABRA "registrar")
     # -------------------------------------------------------------
     elif accion == "registrar" or accion == "/registrar":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         suscripciones_previas = obtener_suscripciones_por_id(chat_id)
         if suscripciones_previas:
@@ -310,6 +309,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
 
     if es_callback and accion.startswith("volver_pago_sin_cupon_"):
         try:
+            esperando_codigo_cupon_cliente.pop(str_chat_id, None)
             row_idx_target = int(accion.split("_")[-1])
             sheet = conectar_sheets()
             registros = sheet.get_all_records()
@@ -726,11 +726,14 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     # -------------------------------------------------------------
-    # CANCELAR Y VOLVER AL MENÚ
+    # CANCELAR Y VOLVER AL MENÚ (LIMPIA FILAS HUÉRFANAS O RESTAURA RENOVACIÓN)
     # -------------------------------------------------------------
     if accion == "menu_principal" or accion == "/start" or accion == "/menu":
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
+
         for diccionario in [
-            esperando_captura_pago, esperando_nuevo_nombre_perfil, esperando_busqueda_admin,
+            esperando_nuevo_nombre_perfil, esperando_busqueda_admin,
             asistente_cuenta_datos, asistente_edicion_admin, asistente_cupon_admin,
             esperando_codigo_cupon_cliente, detalles_pago_activos, asistente_difusion_admin
         ]:
@@ -814,9 +817,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # PAGO EN EFECTIVO
     # -------------------------------------------------------------
     if accion == "efectivo" or accion == "/efectivo":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         botones_selector = []
@@ -853,7 +855,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         try:
             servicio_elegido = "Netflix" if "netflix" in accion else "Disney+"
             nueva_fila_idx = crear_nueva_fila_pendiente(str_chat_id, nombre, username, servicio_elegido, enviar_mensaje_callback)
-            esperando_captura_pago[str_chat_id] = nueva_fila_idx
             notificar_pago_efectivo(chat_id, str_chat_id, nombre, username, nueva_fila_idx, "Pantalla Nueva", enviar_mensaje_callback, editar_mensaje_callback, message_id, es_callback, ADMIN_ID)
         except Exception as e:
             print(f"Error en efectivo nuevo: {e}")
@@ -1554,9 +1555,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # MENÚ PRINCIPAL Y CLIENTE (VER DATOS, OTP, RENOVACIONES, ETC.)
     # -------------------------------------------------------------
     elif accion == "ver_datos" or "cuenta" in accion:
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         if not suscripciones:
@@ -1655,9 +1655,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     elif accion == "obtener_codigo" or "codigo" in accion:
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         if not verificar_cliente_activo(chat_id):
             registrar_intento_sospechoso_otp(chat_id, nombre, username, enviar_mensaje_callback, ADMIN_ID)
@@ -1713,9 +1712,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
 
     elif accion == "renovar_suscripcion":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         suscripciones = obtener_suscripciones_por_id(chat_id)
         if not suscripciones:
@@ -1761,9 +1759,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             enviar_mensaje_callback(chat_id, "⚠️ Ocurrió un error. Intenta de nuevo.", get_back_keyboard())
 
     elif accion == "comprar_extra":
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         from config_y_estado import PRECIO_DISNEY_USD, PRECIO_NETFLIX_USD
         mensaje = (
@@ -1785,9 +1782,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             enviar_mensaje_callback(chat_id, mensaje, teclado_servicios)
 
     elif accion.startswith("pagar_servicio_"):
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         es_netflix = "netflix" in accion
         servicio_elegido = "Netflix" if es_netflix else "Disney+"
@@ -1829,9 +1825,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
     # SOPORTE, FAQ Y TÉRMINOS
     # -------------------------------------------------------------
     elif accion == "soporte" or "pago" in accion:
-        if str_chat_id in esperando_captura_pago:
-            row_huerta = esperando_captura_pago.pop(str_chat_id)
-            limpiar_fila_cancelada_o_renovacion(row_huerta)
+        row_huerta = esperando_captura_pago.pop(str_chat_id, None)
+        limpiar_fila_cancelada_o_renovacion(row_huerta, chat_id_respaldo=str_chat_id)
 
         from config_y_estado import WHATSAPP_NUMERO
         texto_wa = f"Hola, necesito soporte con mi servicio de Streaming. Mi ID es: {str_chat_id}."
