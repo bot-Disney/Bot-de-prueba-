@@ -740,8 +740,9 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             diccionario.pop(str_chat_id, None)
             
         texto_menu = (
-            "🤖 *Bienvenido al servicio de Streaming*\n\n"
-            "Gestiona tus pantallas, códigos de acceso y renovaciones desde los botones de abajo:"
+            "🤖 *!Hola! Bienvenido a tu Streaming* 🎬\n\n"
+            "¿Quieres adquirir tu primera pantalla? Toca *🛒 Comprar Pantalla* para ver los servicios disponibles y empezar hoy mismo."
+            *(Si ya eres cliente, aquí también puedes consultar tus pantallas, pedir códigos de acceso o renovar).*
         )
         teclado = get_main_menu_keyboard()
         if es_callback and editar_mensaje_callback:
