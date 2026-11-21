@@ -741,7 +741,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             
         texto_menu = (
             "🤖 *!Hola! Bienvenido a tu Streaming* 🎬\n\n"
-            "¿Quieres adquirir tu primera pantalla? Toca *🛒 Comprar Pantalla* para ver los servicios"
+            "¿Quieres adquirir tu primera pantalla? Toca *🛒 Comprar Pantalla* para ver los servicios "
             "disponibles.\n\n"
             "*Si ya eres cliente, aquí también puedes consultar tus pantallas, pedir códigos de acceso o renovar.*"
         )
