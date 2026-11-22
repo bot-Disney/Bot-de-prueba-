@@ -17,6 +17,7 @@ from whatsapp_api import (
     enviar_mensaje_whatsapp,
     descargar_media_whatsapp,
     registrar_interaccion_whatsapp,
+    puede_enviar_whatsapp_libre,
 )
 
 app = FastAPI()
@@ -94,14 +95,18 @@ def iniciar_vigilante_pagos_pendientes():
                                     limpiar_fila_cancelada_o_renovacion(idx)
                                     print(f"🧹 Fila {idx} liberada automáticamente tras superar 30 minutos sin reporte de pago.", flush=True)
 
-                                    if tid_cliente and not _es_id_whatsapp(tid_cliente):
+                                    if tid_cliente:
                                         try:
                                             msg_vencido = (
                                                 "⏳ *TIEMPO DE ESPERA AGOTADO*\n\n"
                                                 f"Tu orden pendiente para *{srv_vencido}* ha expirado al superarse los 30 minutos sin reportar pago.\n"
                                                 "Tu cupo ha sido liberado. Cuando gustes, puedes generar una nueva solicitud desde el menú."
                                             )
-                                            enviar_mensaje_telegram(tid_cliente, msg_vencido)
+                                            if _es_id_whatsapp(tid_cliente):
+                                                if puede_enviar_whatsapp_libre(tid_cliente):
+                                                    enviar_mensaje_whatsapp_wrapper(tid_cliente, msg_vencido)
+                                            else:
+                                                enviar_mensaje_telegram(tid_cliente, msg_vencido)
                                         except Exception:
                                             pass
                             except ValueError:
