@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import datetime
@@ -34,10 +35,29 @@ menus_whatsapp_activos = {}
 # Diccionario temporal para evitar reprocesar reintentos de Meta (mismo wamid)
 mensajes_whatsapp_procesados = {}
 
+_PATRON_ETIQUETAS_HTML = re.compile(
+    r"</?(?:blockquote|b|strong|i|em|u|ins|s|strike|del|code|pre)(?:\s[^>]*)?>",
+    re.IGNORECASE,
+)
+
 
 def _es_id_whatsapp(chat_id):
     """Detecta si el identificador corresponde a un número de WhatsApp (11+ dígitos)."""
     return str(chat_id).strip().isdigit() and len(str(chat_id).strip()) >= 11
+
+
+def _contiene_html_telegram(texto):
+    """Detecta si el texto contiene etiquetas HTML compatibles con Telegram."""
+    if not texto:
+        return False
+    return bool(re.search(r"<(?:blockquote|b|i|u|s|code|pre)(?:\s[^>]*)?>", str(texto), re.IGNORECASE))
+
+
+def _limpiar_html_para_whatsapp(texto):
+    """Elimina etiquetas HTML para evitar que aparezcan literales en WhatsApp."""
+    if not texto:
+        return ""
+    return _PATRON_ETIQUETAS_HTML.sub("", str(texto))
 
 
 # =============================================================
@@ -320,7 +340,7 @@ async def recibir_mensaje_whatsapp(request: Request):
 def enviar_mensaje_whatsapp_wrapper(chat_id, texto, teclado=None):
     """Convierte mensajes y teclados de Telegram en texto con opciones numeradas para WhatsApp."""
     str_id = str(chat_id).strip()
-    texto_final = texto
+    texto_final = _limpiar_html_para_whatsapp(texto)
 
     if teclado and isinstance(teclado, dict) and "inline_keyboard" in teclado:
         opciones_mapa = {}
@@ -329,7 +349,7 @@ def enviar_mensaje_whatsapp_wrapper(chat_id, texto, teclado=None):
 
         for fila in teclado["inline_keyboard"]:
             for boton in fila:
-                etiqueta = boton.get("text", "").strip()
+                etiqueta = _limpiar_html_para_whatsapp(boton.get("text", "")).strip()
                 cb_data = boton.get("callback_data")
                 url_btn = boton.get("url")
 
@@ -448,10 +468,11 @@ async def recibir_webhook(request: Request):
 def enviar_mensaje_telegram(chat_id, texto, teclado=None):
     """Envía un mensaje nuevo al chat de Telegram."""
     url = f"{TELEGRAM_API_URL}/sendMessage"
+    modo_formato = "HTML" if _contiene_html_telegram(texto) else "Markdown"
     payload = {
         "chat_id": chat_id,
         "text": texto,
-        "parse_mode": "Markdown",
+        "parse_mode": modo_formato,
     }
     if teclado:
         payload["reply_markup"] = teclado
@@ -466,12 +487,13 @@ def enviar_mensaje_telegram(chat_id, texto, teclado=None):
 def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
     """Reenvía una foto (por file_id de Telegram o bytes descargados de WhatsApp) al Admin."""
     url = f"{TELEGRAM_API_URL}/sendPhoto"
+    modo_formato = "HTML" if _contiene_html_telegram(caption) else "Markdown"
     try:
         if isinstance(photo_file_id, bytes):
             data = {
                 "chat_id": chat_id,
                 "caption": caption,
-                "parse_mode": "Markdown",
+                "parse_mode": modo_formato,
             }
             if teclado:
                 data["reply_markup"] = json.dumps(teclado)
@@ -482,7 +504,7 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
                 "chat_id": chat_id,
                 "photo": photo_file_id,
                 "caption": caption,
-                "parse_mode": "Markdown",
+                "parse_mode": modo_formato,
             }
             if teclado:
                 payload["reply_markup"] = teclado
@@ -497,11 +519,12 @@ def enviar_foto_telegram(chat_id, photo_file_id, caption, teclado=None):
 def editar_mensaje_telegram(chat_id, message_id, texto, teclado=None):
     """Edita un mensaje existente para una experiencia más fluida."""
     url = f"{TELEGRAM_API_URL}/editMessageText"
+    modo_formato = "HTML" if _contiene_html_telegram(texto) else "Markdown"
     payload = {
         "chat_id": chat_id,
         "message_id": message_id,
         "text": texto,
-        "parse_mode": "Markdown",
+        "parse_mode": modo_formato,
     }
     if teclado:
         payload["reply_markup"] = teclado
