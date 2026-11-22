@@ -13,7 +13,11 @@ from bot_logic import (
     obtener_hora_venezuela,
 )
 from alertas import revisar_y_enviar_alertas_vencimiento
-from whatsapp_api import enviar_mensaje_whatsapp, descargar_media_whatsapp
+from whatsapp_api import (
+    enviar_mensaje_whatsapp,
+    descargar_media_whatsapp,
+    registrar_interaccion_whatsapp,
+)
 
 app = FastAPI()
 
@@ -30,17 +34,30 @@ menus_whatsapp_activos = {}
 mensajes_whatsapp_procesados = {}
 
 
+def _es_id_whatsapp(chat_id):
+    """Detecta si el identificador corresponde a un número de WhatsApp (11+ dígitos)."""
+    return str(chat_id).strip().isdigit() and len(str(chat_id).strip()) >= 11
+
+
 # =============================================================
 # ENVÍO INTELIGENTE (DETECTA SI ES TELEGRAM O WHATSAPP)
 # =============================================================
 def enviar_mensaje_unificado(chat_id, texto, teclado=None):
     """Enruta el mensaje hacia WhatsApp o Telegram según el formato del ID."""
     str_id = str(chat_id).strip()
-    # Los números de WhatsApp incluyen código de país (ej: 58424...) y suelen tener 11+ dígitos
-    if str_id.isdigit() and len(str_id) >= 11:
+    if _es_id_whatsapp(str_id):
         enviar_mensaje_whatsapp_wrapper(str_id, texto, teclado)
     else:
         enviar_mensaje_telegram(chat_id, texto, teclado)
+
+
+def enviar_alerta_solo_telegram(chat_id, texto, teclado=None):
+    """Envía alertas automáticas únicamente por Telegram para proteger la línea de WhatsApp."""
+    str_id = str(chat_id).strip()
+    if _es_id_whatsapp(str_id):
+        print(f"🛡️ Alerta automática omitida para WhatsApp ({str_id}) para proteger la línea.", flush=True)
+        return
+    enviar_mensaje_telegram(chat_id, texto, teclado)
 
 
 # =============================================================
@@ -77,14 +94,14 @@ def iniciar_vigilante_pagos_pendientes():
                                     limpiar_fila_cancelada_o_renovacion(idx)
                                     print(f"🧹 Fila {idx} liberada automáticamente tras superar 30 minutos sin reporte de pago.", flush=True)
 
-                                    if tid_cliente:
+                                    if tid_cliente and not _es_id_whatsapp(tid_cliente):
                                         try:
                                             msg_vencido = (
                                                 "⏳ *TIEMPO DE ESPERA AGOTADO*\n\n"
                                                 f"Tu orden pendiente para *{srv_vencido}* ha expirado al superarse los 30 minutos sin reportar pago.\n"
                                                 "Tu cupo ha sido liberado. Cuando gustes, puedes generar una nueva solicitud desde el menú."
                                             )
-                                            enviar_mensaje_unificado(tid_cliente, msg_vencido)
+                                            enviar_mensaje_telegram(tid_cliente, msg_vencido)
                                         except Exception:
                                             pass
                             except ValueError:
@@ -109,7 +126,7 @@ def iniciar_reloj_alertas():
         while True:
             try:
                 print("⏰ Ejecutando revisión automática diaria de vencimientos...", flush=True)
-                revisar_y_enviar_alertas_vencimiento(enviar_mensaje_unificado)
+                revisar_y_enviar_alertas_vencimiento(enviar_alerta_solo_telegram)
             except Exception as e:
                 print(f"Error en el bucle automático de alertas: {e}", flush=True)
             time.sleep(86400)
@@ -221,6 +238,7 @@ async def recibir_mensaje_whatsapp(request: Request):
         if messages:
             msg = messages[0]
             remitente = str(msg.get("from", "")).strip()
+            registrar_interaccion_whatsapp(remitente)
             tipo_msg = msg.get("type")
 
             contacts = value.get("contacts", [])
