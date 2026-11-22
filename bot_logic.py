@@ -51,6 +51,33 @@ from flujo_admin import (
 )
 
 
+def _construir_mensaje_bienvenida(nombre):
+    """Genera el mensaje de bienvenida con bloque citado HTML para Telegram."""
+    nombre_limpio = (
+        str(nombre or "Cliente")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .strip()
+    )
+    return (
+        "🤖 <b>¡Bienvenido a Tu Streaming 24/7!</b>\n\n"
+        f"Hola, <b>{nombre_limpio}</b> 👋🏻\n\n"
+        "<blockquote>"
+        "🤖 Tu tienda digital de entretenimiento 24/7\n"
+        "🎬 Cuentas y pantallas de streaming al mejor costo\n"
+        "⚡ Entrega rápida y activación automática\n"
+        "💳 Métodos de pago rápidos y seguros"
+        "</blockquote>\n\n"
+        "📲 <b>Ver mis datos / pantallas</b> — Consulta tus accesos y fechas\n"
+        "🔑 <b>Solicitar Código</b> — Pide tu código temporal al instante\n"
+        "🔄 <b>Renovar (+30 días)</b> — Extiende tu servicio sin perderlo\n"
+        "🛒 <b>Comprar Pantalla</b> — Explora los servicios disponibles\n"
+        "💬 <b>Soporte / Pagos</b> — Resuelve dudas o reporta pagos\n\n"
+        "¡Elige una opción abajo para continuar! 👇🏻"
+    )
+
+
 def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callback, editar_mensaje_callback=None, message_id=None, es_callback=False, callback_data=None, photo_file_id=None, enviar_foto_callback=None):
     """Cerebro enrutador industrial conectado con los submódulos de la arquitectura limpia."""
     
@@ -739,12 +766,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         ]:
             diccionario.pop(str_chat_id, None)
             
-        texto_menu = (
-            "🤖 *!Hola! Bienvenido a tu Streaming* 🎬\n\n"
-            "¿Quieres adquirir tu primera pantalla? Toca *🛒 Comprar Pantalla* para ver los servicios "
-            "disponibles.\n\n"
-            "*Si ya eres cliente, aquí también puedes consultar tus pantallas, pedir códigos de acceso o renovar.*"
-        )
+        texto_menu = _construir_mensaje_bienvenida(nombre)
         teclado = get_main_menu_keyboard()
         if es_callback and editar_mensaje_callback:
             editar_mensaje_callback(chat_id, message_id, texto_menu, teclado)
@@ -1878,7 +1900,6 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         return
 
     else:
-        mensaje = "🤖 *¡Hola! Bienvenido a tu Streaming* 🎬\n\n¿Quieres adquirir tu primera pantalla? Toca *🛒 Comprar Pantalla* para ver los servicios disponibles.\n\n*(Si ya eres cliente, aquí también puedes consultar tus pantallas, pedir códigos de acceso o renovar).*"
+        mensaje = _construir_mensaje_bienvenida(nombre)
         teclado = get_main_menu_keyboard()
         enviar_mensaje_callback(chat_id, mensaje, teclado)
-
