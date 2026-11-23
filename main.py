@@ -36,7 +36,7 @@ menus_whatsapp_activos = {}
 mensajes_whatsapp_procesados = {}
 
 _PATRON_ETIQUETAS_HTML = re.compile(
-    r"</?(?:blockquote|b|strong|i|em|u|ins|s|strike|del|code|pre)(?:\s[^>]*)?>",
+    r"</?(?:blockquote|b|strong|i|em|u|ins|s|strike|del|code|pre|tg-emoji|a)(?:\s[^>]*)?>",
     re.IGNORECASE,
 )
 
@@ -50,7 +50,13 @@ def _contiene_html_telegram(texto):
     """Detecta si el texto contiene etiquetas HTML compatibles con Telegram."""
     if not texto:
         return False
-    return bool(re.search(r"<(?:blockquote|b|i|u|s|code|pre)(?:\s[^>]*)?>", str(texto), re.IGNORECASE))
+    return bool(
+        re.search(
+            r"<(?:blockquote|b|strong|i|em|u|s|code|pre|tg-emoji|a)(?:\s[^>]*)?>",
+            str(texto),
+            re.IGNORECASE,
+        )
+    )
 
 
 def _limpiar_html_para_whatsapp(texto):
