@@ -84,11 +84,11 @@ def _construir_mensaje_bienvenida(nombre):
         "⚡ Entrega rápida y activación automática\n"
         "💳 Métodos de pago rápidos y seguros"
         "</blockquote>\n\n"
-        "📲 <b>Ver mis datos / pantallas</b> — Consulta tus accesos y fechas\n"
-        "🔑 <b>Solicitar Código</b> — Pide tu código de inicio al instante\n"
-        "🔄 <b>Renovar (+30 días)</b> — Extiende tu servicio sin perderlo\n"
-        "🛒 <b>Comprar Pantalla</b> — Explora los servicios disponibles\n"
-        "💬 <b>Soporte / Pagos</b> — Resuelve dudas o reporta pagos\n\n"
+        "📲 <b>Ver mis datos / pantallas:</b> Tus accesos y fechas\n"
+        "🔑 <b>Solicitar Código:</b> Código de inicio al instante\n"
+        "🔄 <b>Renovar (+30 días):</b> Extiende tu servicio\n"
+        "🛒 <b>Comprar Pantalla:</b> Servicios disponibles\n"
+        "💬 <b>Soporte / Pagos:</b> Obtener ayuda\n\n"
         "¡Elige una opción abajo para continuar! 👇🏻"
     )
 
