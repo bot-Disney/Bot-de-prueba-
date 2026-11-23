@@ -50,6 +50,17 @@ from flujo_admin import (
     verificar_y_notificar_vencimientos_admin
 )
 
+EMOJI_ID_DISNEY = "4907143089371482541"
+EMOJI_ID_NETFLIX = "4906845181849897544"
+
+
+def icono_servicio_html(servicio):
+    """Devuelve el custom emoji HTML para Telegram según el servicio."""
+    srv = str(servicio or "").lower()
+    if "netflix" in srv:
+        return f'<tg-emoji emoji-id="{EMOJI_ID_NETFLIX}">🎬</tg-emoji>'
+    return f'<tg-emoji emoji-id="{EMOJI_ID_DISNEY}">✨</tg-emoji>'
+
 
 def _construir_mensaje_bienvenida(nombre):
     """Genera el mensaje de bienvenida con bloque citado HTML para Telegram."""
@@ -604,7 +615,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     f"✅ *¡CLIENTE REGISTRADO MANUALMENTE CON ÉXITO!*\n\n"
                     f"• *Cliente:* {nombre_cliente_encontrado}\n"
                     f"• *Telegram ID:* `{tid_target}`\n"
-                    f"• *Servicio:* {srv_sel} ({perfil_sel})\n"
+                    f"• *Servicio:* {icono_servicio_html(srv_sel)} {srv_sel} ({perfil_sel})\n"
                     f"• *Correo:* `{correo_sel}`\n"
                     f"• *Vencimiento:* `{fecha_vencimiento}`",
                     {"inline_keyboard": [[{"text": "🔙 Volver al Panel Admin", "callback_data": "admin_volver"}]]}
@@ -613,7 +624,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 try:
                     msg_para_cliente = (
                         "🎉 *¡TU CUENTA HA SIDO REGISTRADA CON ÉXITO!*\n\n"
-                        f"Ya puedes consultar los datos de tu acceso de *{srv_sel}* ({perfil_sel}) presionando el botón de abajo:"
+                        f"Ya puedes consultar los datos de tu acceso de *{icono_servicio_html(srv_sel)} {srv_sel}* ({perfil_sel}) presionando el botón de abajo:"
                     )
                     enviar_mensaje_callback(
                         int(tid_target),
@@ -680,7 +691,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 f"🟢 *Fila {row_idx}*\n"
                 f"• *Cliente:* {nom_a}\n"
                 f"• *Telegram ID:* `{tid_a}`\n"
-                f"• *Servicio:* {srv_a} ({pnt_a})\n"
+                f"• *Servicio:* {icono_servicio_html(srv_a)} {srv_a} ({pnt_a})\n"
                 f"• *Correo:* `{cta_a}`\n"
                 f"• *Vence el:* `{fec_a}`"
             )
@@ -732,7 +743,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     "✏️ *¡SOLICITUD DE CAMBIO DE NOMBRE DE PERFIL!* ✏️\n\n"
                     f"• *Cliente:* {nombre} (@{username})\n"
                     f"• *Telegram ID:* `{str_chat_id}`\n"
-                    f"• *Servicio:* {servicio_perfil}\n"
+                    f"• *Servicio:* {icono_servicio_html(servicio_perfil)} {servicio_perfil}\n"
                     f"• *Correo/Cuenta:* `{cuenta_perfil}`\n"
                     f"• *Perfil base:* {numero_base}\n"
                     f"• *Nuevo nombre solicitado:* `{nuevo_nombre}`\n\n"
@@ -803,7 +814,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                 "🔔 *¡NUEVO COMPROBANTE DE PAGO (FOTO)!* 🔔\n\n"
                 f"• *Cliente:* {nombre} (@{username})\n"
                 f"• *Telegram ID:* `{str_chat_id}`\n"
-                f"• *Servicio:* {servicio_asociado} ({pantalla_asociada})\n"
+                f"• *Servicio:* {icono_servicio_html(servicio_asociado)} {servicio_asociado} ({pantalla_asociada})\n"
                 f"• *Cuenta/Detalle:* {cuenta_asociada}\n\n"
                 f"🎟️ *Cupón utilizado:* `{cupon_txt}`\n"
                 f"💵 *Monto en USD:* `${monto_usd:.2f} USDT`\n"
@@ -1213,7 +1224,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     pins = safe_get(row, "PINs de Perfiles", "S/PIN")
 
                     txt_cta = (
-                        f"📺 *Servicio:* {srv}\n"
+                        f"{icono_servicio_html(srv)} *Servicio:* {srv}\n"
                         f"• *Correo:* `{correo}`\n"
                         f"• *Ocupados:* `{ocu} / {cap}` perfiles\n"
                         f"• *Estado:* *{est}*\n"
@@ -1265,8 +1276,8 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             mensaje_carga = "➕ *CARGAR NUEVA CUENTA Y PINS*\n\nSelecciona a qué plataforma pertenece la cuenta:"
             teclado_servicios = {
                 "inline_keyboard": [
-                    [{"text": "📺 Netflix (5 Perfiles)", "callback_data": "admin_cuenta_netflix"}],
-                    [{"text": "📺 Disney+ (7 Perfiles)", "callback_data": "admin_cuenta_disney"}],
+                    [{"text": "🎬 Netflix (5 Perfiles)", "callback_data": "admin_cuenta_netflix"}],
+                    [{"text": "✨ Disney+ (7 Perfiles)", "callback_data": "admin_cuenta_disney"}],
                     [{"text": "🔙 Volver", "callback_data": "admin_gestionar_cuentas"}]
                 ]
             }
@@ -1289,7 +1300,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
             }
 
             mensaje_peticion = (
-                f"➕ *NUEVA CUENTA DE {servicio_elegido.upper()}*\n\n"
+                f"➕ *NUEVA CUENTA DE {icono_servicio_html(servicio_elegido)} {servicio_elegido.upper()}*\n\n"
                 "Paso 1/2: Escribe o pega el **correo y contraseña** de la cuenta\n(Ej: `correo@gmail.com : tucontraseña`):"
             )
             teclado_canc = {
@@ -1355,7 +1366,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                         f"🟡 *Pago Pendiente #{idx}* (Fila {row_idx})\n"
                         f"• *Cliente:* {safe_get(p, 'Nombre')}\n"
                         f"• *Telegram ID:* `{safe_get(p, 'Telegram_ID')}`\n"
-                        f"• *Servicio:* {srv_p} ({pnt_p})\n"
+                        f"• *Servicio:* {icono_servicio_html(srv_p)} {srv_p} ({pnt_p})\n"
                         f"• *Cuenta/Correo:* {safe_get(p, 'Cuenta')}"
                     )
                     teclado_aprobar = {
@@ -1391,7 +1402,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     try:
                         msg_usuario = (
                             "⚠️ *AVISO DE SUSPENSIÓN*\n\n"
-                            f"Tu suscripción a *{srv_exp}* ({pnt_exp}) ha sido finalizada por el administrador.\n"
+                            f"Tu suscripción a *{icono_servicio_html(srv_exp)} {srv_exp}* ({pnt_exp}) ha sido finalizada por el administrador.\n"
                             "Si consideras que se trata de un error, comunícate con soporte."
                         )
                         enviar_mensaje_callback(int(tid_cliente), msg_usuario, get_main_menu_keyboard())
@@ -1417,7 +1428,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     txt = (
                         f"🔴 *Pantalla Vencida #{idx}* (Fila {row_idx})\n"
                         f"• *Cliente:* {safe_get(v, 'Nombre')}\n"
-                        f"• *Servicio:* {srv_v} ({pnt_v})\n"
+                        f"• *Servicio:* {icono_servicio_html(srv_v)} {srv_v} ({pnt_v})\n"
                         f"• *Correo:* `{cta_v}`\n"
                         f"• *Venció el:* `{fec_v}`"
                     )
@@ -1469,7 +1480,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     texto_res = (
                         f"✅ *¡PAGO APROBADO CON ÉXITO!* (Fila {row_idx})\n\n"
                         f"• *Cliente:* {nombre_cliente}\n"
-                        f"• *Servicio:* {srv_aprobado} ({perfil_asignado})\n"
+                        f"• *Servicio:* {icono_servicio_html(srv_aprobado)} {srv_aprobado} ({perfil_asignado})\n"
                         f"• *Cuenta:* `{cuenta_fila}`\n"
                         f"• *Tipo:* {tipo_operacion}\n"
                         f"• *Método:* {metodo_pago}"
@@ -1480,7 +1491,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                             if "pendiente de stock" in str(cuenta_fila).lower():
                                 msg_cliente = (
                                     "🎉 *¡Tu pago ha sido verificado y aprobado!*\n\n"
-                                    f"Tu suscripción de *{srv_aprobado}* ({perfil_asignado}) está **Activa** con **prioridad #1**.\n"
+                                    f"Tu suscripción de *{icono_servicio_html(srv_aprobado)} {srv_aprobado}* ({perfil_asignado}) está **Activa** con **prioridad #1**.\n"
                                     "⏳ Estamos preparando tu cuenta; te notificaremos en cuanto tu correo quede asignado."
                                 )
                                 teclado_cliente = get_main_menu_keyboard()
@@ -1493,7 +1504,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                                     )
                                     msg_cliente = (
                                         "🎉 *¡Tu pago ha sido verificado y aprobado!*\n\n"
-                                        f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ya se encuentra *Activo*.\n"
+                                        f"Tu servicio de *{icono_servicio_html(srv_aprobado)} {srv_aprobado}* ({perfil_asignado}) ya se encuentra *Activo*.\n"
                                         f"• *Correo:* `{cuenta_fila}`\n"
                                         f"• *PIN de seguridad:* `{pin_entregado}` 🔒"
                                         f"{aviso_tv_especial}\n\n"
@@ -1512,7 +1523,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                                 else:
                                     msg_cliente = (
                                         "🎉 *¡Renovación exitosa por 30 días más!*\n\n"
-                                        f"Tu servicio de *{srv_aprobado}* ({perfil_asignado}) ha sido renovado.\n"
+                                        f"Tu servicio de *{icono_servicio_html(srv_aprobado)} {srv_aprobado}* ({perfil_asignado}) ha sido renovado.\n"
                                         f"• *PIN de seguridad:* `{pin_entregado}` 🔒\n\n"
                                         "💡 *Recuerda:* Mantén el uso de un solo dispositivo para evitar bloqueos en tu pantalla.\n\n"
                                         "Presiona OK para confirmar:"
@@ -1565,7 +1576,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     try:
                         msg_rechazo = (
                             "⚠️ *COMPROBANTE RECHAZADO*\n\n"
-                            f"Tu comprobante de pago para *{srv_rechazado}* no pudo ser verificado (puede ser ilegible, incorrecto o duplicado).\n\n"
+                            f"Tu comprobante de pago para *{icono_servicio_html(srv_rechazado)} {srv_rechazado}* no pudo ser verificado (puede ser ilegible, incorrecto o duplicado).\n\n"
                             "Tu suscripción sigue intacta. Por favor, verifica los datos e intenta reportar tu pago nuevamente."
                         )
                         enviar_mensaje_callback(int(tid_cliente), msg_rechazo, get_main_menu_keyboard())
@@ -1613,7 +1624,7 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
                     tiene_por_renovar = True
 
                 bloques.append(
-                    f"🔹 *Suscripción #{idx} ({servicio})*\n"
+                    f"🔹 *Suscripción #{idx} ({icono_servicio_html(servicio)} {servicio})*\n"
                     f"• *Correo:* {correo_mostrar}\n"
                     f"• *Perfil:* {pantalla}\n"
                     f"• *PIN de seguridad:* {pin_mostrar} 🔒\n"
@@ -1790,13 +1801,13 @@ def procesar_mensaje_bot(chat_id, texto, nombre, username, enviar_mensaje_callba
         mensaje = (
             "🛒 *COMPRAR NUEVA PANTALLA*\n\n"
             "¿Qué plataforma deseas comprar como nueva pantalla?\n\n"
-            f"• *Disney+:* `${PRECIO_DISNEY_USD:.2f} USDT`\n"
-            f"• *Netflix:* `${PRECIO_NETFLIX_USD:.2f} USDT`"
+            f"• {icono_servicio_html('Disney+')} *Disney+:* `${PRECIO_DISNEY_USD:.2f} USDT`\n"
+            f"• {icono_servicio_html('Netflix')} *Netflix:* `${PRECIO_NETFLIX_USD:.2f} USDT`"
         )
         teclado_servicios = {
             "inline_keyboard": [
-                [{"text": f"📺 Disney+ (${PRECIO_DISNEY_USD:.2f})", "callback_data": "pagar_servicio_disney_nueva"}],
-                [{"text": f"📺 Netflix (${PRECIO_NETFLIX_USD:.2f})", "callback_data": "pagar_servicio_netflix_nueva"}],
+                [{"text": f"✨ Disney+ (${PRECIO_DISNEY_USD:.2f})", "callback_data": "pagar_servicio_disney_nueva"}],
+                [{"text": f"🎬 Netflix (${PRECIO_NETFLIX_USD:.2f})", "callback_data": "pagar_servicio_netflix_nueva"}],
                 [{"text": "🔙 Volver", "callback_data": "menu_principal"}]
             ]
         }
