@@ -81,7 +81,7 @@ def _construir_mensaje_bienvenida(nombre):
         "💳 Métodos de pago rápidos y seguros"
         "</blockquote>\n\n"
         "📲 <b>Ver mis datos / pantallas</b> — Consulta tus accesos y fechas\n"
-        "🔑 <b>Solicitar Código</b> — Pide tu código temporal al instante\n"
+        "🔑 <b>Solicitar Código</b> — Pide tu código de inicio al instante\n"
         "🔄 <b>Renovar (+30 días)</b> — Extiende tu servicio sin perderlo\n"
         "🛒 <b>Comprar Pantalla</b> — Explora los servicios disponibles\n"
         "💬 <b>Soporte / Pagos</b> — Resuelve dudas o reporta pagos\n\n"
